@@ -1,0 +1,106 @@
+{
+  "title": "TinyPrint X6h",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Подключить TinyPrint X6h",
+        "description": "Укажи Bluetooth-адрес. Приложение и сопряжение не нужны. Перед печатью включи принтер. Для кириллицы укажи путь к локальному шрифту TTF/OTF с поддержкой Unicode.",
+        "data": {
+          "address": "Bluetooth-адрес",
+          "name": "Название устройства",
+          "font_path": "Путь к шрифту (необязательно)"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Найден TinyPrint X6h",
+        "description": "Добавить {name}? На этом шаге ничего не печатается."
+      }
+    },
+    "error": {
+      "invalid_address": "Укажи адрес в формате AA:BB:CC:DD:EE:FF"
+    },
+    "abort": {
+      "already_configured": "Этот принтер уже добавлен",
+      "not_supported": "Это устройство не является поддерживаемым принтером X6h",
+      "invalid_address": "Некорректный Bluetooth MAC-адрес в конфигурации."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Настройки печати",
+        "data": {
+          "font_path": "Путь к локальному Unicode-шрифту TTF/OTF"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "test_print": {
+        "name": "Пробная печать"
+      }
+    },
+    "sensor": {
+      "job_status": {
+        "name": "Задание печати",
+        "state": {
+          "idle": "Ожидание",
+          "rendering": "Подготовка",
+          "connecting": "Подключение",
+          "printing": "Передача",
+          "sent": "Передано (отпечаток не подтверждён)",
+          "error": "Ошибка"
+        }
+      }
+    }
+  },
+  "services": {
+    "print_text": {
+      "name": "Напечатать текст",
+      "description": "Печать текста с переносом строк. Результат подтверждает передачу данных, а не физический отпечаток.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Plain text, up to 3000 characters; limited to 2048 rendered rows."
+        },
+        "font_size": {
+          "name": "Font size",
+          "description": "Font size in pixels (12 to 64)."
+        },
+        "device_id": {
+          "name": "Printer",
+          "description": "Required when multiple TinyPrint printers are configured."
+        }
+      }
+    },
+    "print_qr": {
+      "name": "Напечатать QR-код",
+      "description": "Печать QR-кода без размытия, с необходимыми полями.",
+      "fields": {
+        "text": {
+          "name": "QR data",
+          "description": "Up to 500 characters; dense codes that cannot fit are rejected."
+        },
+        "device_id": {
+          "name": "Printer",
+          "description": "Required when multiple TinyPrint printers are configured."
+        }
+      }
+    },
+    "print_image": {
+      "name": "Напечатать изображение",
+      "description": "Печать локального изображения из разрешённого каталога HA. Ссылки не принимаются.",
+      "fields": {
+        "path": {
+          "name": "Image path",
+          "description": "Local image, at most 4 MiB and 4 million source pixels, 2048 output rows."
+        },
+        "device_id": {
+          "name": "Printer",
+          "description": "Required when multiple TinyPrint printers are configured."
+        }
+      }
+    }
+  }
+}

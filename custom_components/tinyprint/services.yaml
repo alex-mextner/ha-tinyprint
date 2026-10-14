@@ -1,0 +1,41 @@
+print_text:
+  fields:
+    text:
+      required: true
+      example: "Hello from Home Assistant"
+      selector:
+        text:
+          multiline: true
+    font_size:
+      default: 24
+      selector:
+        number:
+          min: 12
+          max: 64
+          mode: box
+    device_id:
+      selector:
+        device:
+          integration: tinyprint
+print_qr:
+  fields:
+    text:
+      required: true
+      example: "https://www.home-assistant.io/"
+      selector:
+        text: {}
+    device_id:
+      selector:
+        device:
+          integration: tinyprint
+print_image:
+  fields:
+    path:
+      required: true
+      example: "/config/www/label.png"
+      selector:
+        text: {}
+    device_id:
+      selector:
+        device:
+          integration: tinyprint

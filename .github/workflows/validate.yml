@@ -1,0 +1,40 @@
+name: Validate
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install pytest pytest-asyncio Pillow==12.3.0 qrcode==8.2 ruff
+      - run: python -m pytest tests/test_core.py tests/test_transport.py -q
+      - run: ruff check . && ruff format --check .
+  home-assistant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the actual Home Assistant image
+        run: >-
+          docker run --rm --entrypoint /bin/sh -v "$PWD:/workspace" -w /workspace
+          ghcr.io/home-assistant/home-assistant:2026.9.3
+          -c 'python -m pip install --target /tmp/test-deps --no-deps qrcode==8.2 &&
+          PYTHONPATH=/workspace:/tmp/test-deps python -m unittest discover -s tests -p test_ha.py -v'
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration

@@ -1,0 +1,106 @@
+{
+  "title": "TinyPrint X6h",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect TinyPrint X6h",
+        "description": "Enter the Bluetooth address. No mobile app or pairing is required. Power on the printer before printing. For Cyrillic, provide a local Unicode TTF/OTF font path.",
+        "data": {
+          "address": "Bluetooth address",
+          "name": "Device name",
+          "font_path": "Local font path (optional)"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "TinyPrint X6h discovered",
+        "description": "Set up {name}? This does not print anything."
+      }
+    },
+    "error": {
+      "invalid_address": "Enter an address in the form AA:BB:CC:DD:EE:FF"
+    },
+    "abort": {
+      "already_configured": "This printer is already configured",
+      "not_supported": "This Bluetooth device is not a supported X6h printer",
+      "invalid_address": "Invalid Bluetooth MAC address in configuration."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Printing options",
+        "data": {
+          "font_path": "Local Unicode TTF/OTF font path"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "test_print": {
+        "name": "Test print"
+      }
+    },
+    "sensor": {
+      "job_status": {
+        "name": "Print job",
+        "state": {
+          "idle": "Idle",
+          "rendering": "Rendering",
+          "connecting": "Connecting",
+          "printing": "Sending",
+          "sent": "Sent (not physically confirmed)",
+          "error": "Error"
+        }
+      }
+    }
+  },
+  "services": {
+    "print_text": {
+      "name": "Print text",
+      "description": "Print wrapped text as a bitmap. The response confirms transport only, not physical paper output.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Plain text, up to 3000 characters; limited to 2048 rendered rows."
+        },
+        "font_size": {
+          "name": "Font size",
+          "description": "Font size in pixels (12 to 64)."
+        },
+        "device_id": {
+          "name": "Printer",
+          "description": "Required when multiple TinyPrint printers are configured."
+        }
+      }
+    },
+    "print_qr": {
+      "name": "Print QR code",
+      "description": "Print a QR code without interpolation, including its quiet zone.",
+      "fields": {
+        "text": {
+          "name": "QR data",
+          "description": "Up to 500 characters; dense codes that cannot fit are rejected."
+        },
+        "device_id": {
+          "name": "Printer",
+          "description": "Required when multiple TinyPrint printers are configured."
+        }
+      }
+    },
+    "print_image": {
+      "name": "Print image",
+      "description": "Print a local image from an allowed Home Assistant path. Remote URLs are not accepted.",
+      "fields": {
+        "path": {
+          "name": "Image path",
+          "description": "Local image, at most 4 MiB and 4 million source pixels, 2048 output rows."
+        },
+        "device_id": {
+          "name": "Printer",
+          "description": "Required when multiple TinyPrint printers are configured."
+        }
+      }
+    }
+  }
+}
