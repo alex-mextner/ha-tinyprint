@@ -25,8 +25,6 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/alex-mextner/ha-tinyprint/issues",
   "requirements": [
-    "bleak-retry-connector==4.7.0",
-    "Pillow==12.3.0",
     "qrcode==8.2"
   ],
   "version": "0.1.0"

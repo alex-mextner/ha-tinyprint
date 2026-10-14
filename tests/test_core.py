@@ -141,3 +141,16 @@ def test_non_image_is_validation_error(tmp_path):
     path.write_text("not an image")
     with pytest.raises(ValueError, match="readable image"):
         r.render_image(str(path))
+
+
+@pytest.mark.parametrize("failure", [SyntaxError("invalid PNG"), EOFError("truncated frame")])
+def test_corrupt_image_decoding_is_validation_error(tmp_path, monkeypatch, failure):
+    path = tmp_path / "bad.png"
+    path.write_bytes(b"not decoded yet")
+
+    def broken_open(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(r.Image, "open", broken_open)
+    with pytest.raises(ValueError, match="readable image"):
+        r.render_image(str(path))

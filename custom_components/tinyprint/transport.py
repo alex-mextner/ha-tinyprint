@@ -70,7 +70,7 @@ async def send_bitmap(
             ):
                 raise ValueError("Unsupported GATT profile: AE01 write and AE02 notify required")
             # Validate geometry before any write (generator is evaluated on iteration).
-            frames = list(print_frames(bitmap, height, feed=feed))
+            frames = await asyncio.to_thread(lambda: list(print_frames(bitmap, height, feed=feed)))
             await client.start_notify(NOTIFY_UUID, notification)
             notified = True
             for packet in frames:

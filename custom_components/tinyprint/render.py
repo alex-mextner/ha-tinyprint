@@ -103,7 +103,13 @@ def render_image(path: str) -> Image.Image:
             ):
                 raise ValueError("Image exceeds output height limit")
             image = ImageOps.exif_transpose(source).convert("RGBA")
-    except (OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+    except (
+        OSError,
+        SyntaxError,
+        EOFError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as error:
         raise ValueError("Not a readable image or source dimensions are unsafe") from error
     if image.width > WIDTH:
         new_height = round(image.height * WIDTH / image.width)

@@ -152,3 +152,21 @@ def test_default_budget_scales_to_proxy_latency_at_maximum_height():
     estimated_cost = frames * (3 * (0.006 + 0.05) + 0.012) + 30
     assert t.transfer_timeout(2048) >= estimated_cost
     assert 45 <= t.transfer_timeout(1) < t.transfer_timeout(2048) <= 600
+
+
+def test_frame_encoding_runs_outside_event_loop_thread(monkeypatch):
+    import threading
+
+    caller_thread = threading.get_ident()
+    original = t.print_frames
+
+    def encode(*args, **kwargs):
+        assert threading.get_ident() != caller_thread
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(t, "print_frames", encode)
+
+    async def check():
+        await t.send_bitmap(FakeClient(), bytes(48), 1, **KW)
+
+    asyncio.run(check())
