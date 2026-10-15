@@ -21,37 +21,118 @@ MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_PIXELS = 4_000_000
 MAX_BASE64 = 4 * ((MAX_FILE_BYTES + 2) // 3)
 FONT_CANDIDATES = (
-    '/config/tinyprint_fonts/DejaVuSans.ttf',
-    'DejaVuSans.ttf',
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-    '/usr/share/fonts/dejavu/DejaVuSans.ttf',
+    "/config/tinyprint_fonts/DejaVuSans.ttf",
+    "DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
 )
 TEMPLATES = {
-    'note': {'name': 'Заметка', 'fields': ['title', 'text', 'footer'], 'required': ['text'],
-             'example': {'title': 'Не забыть', 'text': 'Забрать посылку\nКупить корм', 'footer': 'Сегодня'}},
-    'heading': {'name': 'Крупная надпись', 'fields': ['title', 'text', 'footer'], 'required': ['title'],
-                'example': {'title': 'МАСТЕРСКАЯ', 'text': 'Инструменты — на место'}},
-    'checklist': {'name': 'Чек-лист', 'fields': ['title', 'text', 'footer'], 'required': ['text'],
-                  'example': {'title': 'Перед печатью', 'text': 'Высушить пластик\nОчистить стол\nПроверить первый слой'}},
-    'qr_label': {'name': 'QR с подписью', 'fields': ['title', 'qr', 'footer'], 'required': ['qr'],
-                 'example': {'title': 'Открыть инструкцию', 'qr': 'https://example.com', 'footer': 'Наведите камеру'}},
-    'storage_label': {'name': 'Ячейка хранения', 'fields': ['title', 'location', 'text', 'qr'], 'required': ['title'],
-                      'example': {'title': 'МЕТИЗЫ M4', 'location': 'Стеллаж А · ячейка 03', 'text': 'Винты и гайки', 'qr': 'https://example.com/box/03'}},
-    'spool_label': {'name': 'Катушка пластика', 'fields': ['title', 'material', 'color', 'weight', 'nozzle', 'qr'], 'required': ['title'],
-                    'example': {'title': 'Катушка 042', 'material': 'PETG', 'color': 'Чёрный', 'weight': '750 г', 'nozzle': '240 °C', 'qr': 'https://example.com/spool/42'}},
+    "note": {
+        "name": "Заметка",
+        "fields": ["title", "text", "footer"],
+        "required": ["text"],
+        "example": {
+            "title": "Не забыть",
+            "text": "Забрать посылку\nКупить корм",
+            "footer": "Сегодня",
+        },
+    },
+    "heading": {
+        "name": "Крупная надпись",
+        "fields": ["title", "text", "footer"],
+        "required": ["title"],
+        "example": {"title": "МАСТЕРСКАЯ", "text": "Инструменты — на место"},
+    },
+    "checklist": {
+        "name": "Чек-лист",
+        "fields": ["title", "text", "footer"],
+        "required": ["text"],
+        "example": {
+            "title": "Перед печатью",
+            "text": "Высушить пластик\nОчистить стол\nПроверить первый слой",
+        },
+    },
+    "qr_label": {
+        "name": "QR с подписью",
+        "fields": ["title", "qr", "footer"],
+        "required": ["qr"],
+        "example": {
+            "title": "Открыть инструкцию",
+            "qr": "https://example.com",
+            "footer": "Наведите камеру",
+        },
+    },
+    "storage_label": {
+        "name": "Ячейка хранения",
+        "fields": ["title", "location", "text", "qr"],
+        "required": ["title"],
+        "example": {
+            "title": "МЕТИЗЫ M4",
+            "location": "Стеллаж А · ячейка 03",
+            "text": "Винты и гайки",
+            "qr": "https://example.com/box/03",
+        },
+    },
+    "spool_label": {
+        "name": "Катушка пластика",
+        "fields": ["title", "material", "color", "weight", "nozzle", "qr"],
+        "required": ["title"],
+        "example": {
+            "title": "Катушка 042",
+            "material": "PETG",
+            "color": "Чёрный",
+            "weight": "750 г",
+            "nozzle": "240 °C",
+            "qr": "https://example.com/spool/42",
+        },
+    },
 }
 PRESETS = {
-    'photo': {'name': 'Фото', 'method': 'floyd_steinberg', 'contrast': 1.25, 'brightness': 1.10, 'sharpness': 1.2},
-    'line_art': {'name': 'Текст / чертёж', 'method': 'threshold', 'contrast': 1.6, 'brightness': 1.0, 'sharpness': 1.5},
-    'logo': {'name': 'Логотип', 'method': 'threshold', 'contrast': 1.3, 'brightness': 1.0, 'sharpness': 1.0},
-    'soft': {'name': 'Мягкие полутона', 'method': 'ordered', 'contrast': 1.0, 'brightness': 1.15, 'sharpness': 1.0},
+    "photo": {
+        "name": "Фото",
+        "method": "floyd_steinberg",
+        "contrast": 1.25,
+        "brightness": 1.10,
+        "sharpness": 1.2,
+    },
+    "line_art": {
+        "name": "Текст / чертёж",
+        "method": "threshold",
+        "contrast": 1.6,
+        "brightness": 1.0,
+        "sharpness": 1.5,
+    },
+    "logo": {
+        "name": "Логотип",
+        "method": "threshold",
+        "contrast": 1.3,
+        "brightness": 1.0,
+        "sharpness": 1.0,
+    },
+    "soft": {
+        "name": "Мягкие полутона",
+        "method": "ordered",
+        "contrast": 1.0,
+        "brightness": 1.15,
+        "sharpness": 1.0,
+    },
 }
 DEFAULTS = {
-    'preset': 'photo', 'method': 'floyd_steinberg', 'threshold': 128,
-    'brightness': 1.1, 'contrast': 1.25, 'sharpness': 1.2,
-    'rotate': 0, 'invert': False, 'width': 384, 'fit': 'width',
-    'font_size': 24, 'align': 'left', 'border': False,
-    'qr_size': 320, 'qr_correction': 'M',
+    "preset": "photo",
+    "method": "floyd_steinberg",
+    "threshold": 128,
+    "brightness": 1.1,
+    "contrast": 1.25,
+    "sharpness": 1.2,
+    "rotate": 0,
+    "invert": False,
+    "width": 384,
+    "fit": "width",
+    "font_size": 24,
+    "align": "left",
+    "border": False,
+    "qr_size": 320,
+    "qr_correction": "M",
 }
 _INVERT = bytes(255 - x for x in range(256))
 _BAYER = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
@@ -62,33 +143,52 @@ def normalize_options(raw: Any = None) -> dict[str, Any]:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict) or raw.keys() - DEFAULTS.keys():
-        raise ValueError('Unknown rendering option')
-    preset = raw.get('preset', 'photo')
+        raise ValueError("Unknown rendering option")
+    preset = raw.get("preset", "photo")
     if not isinstance(preset, str) or preset not in PRESETS:
-        raise ValueError('Unknown image preset')
-    out = DEFAULTS | {k: v for k, v in PRESETS[preset].items() if k != 'name'} | raw
-    ranges = {'font_size': (12, 48), 'width': (96, 384), 'threshold': (1, 254), 'qr_size': (96, 360),
-              'brightness': (.25, 2.0), 'contrast': (.25, 3.0), 'sharpness': (0, 3.0)}
+        raise ValueError("Unknown image preset")
+    out = DEFAULTS | {k: v for k, v in PRESETS[preset].items() if k != "name"} | raw
+    ranges = {
+        "font_size": (12, 48),
+        "width": (96, 384),
+        "threshold": (1, 254),
+        "qr_size": (96, 360),
+        "brightness": (0.25, 2.0),
+        "contrast": (0.25, 3.0),
+        "sharpness": (0, 3.0),
+    }
     for key, (low, high) in ranges.items():
         value = out[key]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
-            raise ValueError(f'{key} must be between {low} and {high}')
-        if key in {'font_size', 'width', 'threshold', 'qr_size'} and not isinstance(value, int):
-            raise ValueError(f'{key} must be an integer')
-    choices = {'method': ('threshold', 'floyd_steinberg', 'ordered'), 'rotate': (0, 90, 180, 270),
-               'align': ('left', 'center', 'right'), 'fit': ('width', 'original'), 'qr_correction': ('M', 'Q', 'H')}
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or not low <= value <= high
+        ):
+            raise ValueError(f"{key} must be between {low} and {high}")
+        if key in {"font_size", "width", "threshold", "qr_size"} and not isinstance(value, int):
+            raise ValueError(f"{key} must be an integer")
+    choices = {
+        "method": ("threshold", "floyd_steinberg", "ordered"),
+        "rotate": (0, 90, 180, 270),
+        "align": ("left", "center", "right"),
+        "fit": ("width", "original"),
+        "qr_correction": ("M", "Q", "H"),
+    }
     for key, values in choices.items():
         if out[key] not in values or isinstance(out[key], bool):
-            raise ValueError(f'Invalid {key}')
-    for key in ('invert', 'border'):
+            raise ValueError(f"Invalid {key}")
+    for key in ("invert", "border"):
         if type(out[key]) is not bool:
-            raise ValueError(f'{key} must be a boolean')
+            raise ValueError(f"{key} must be a boolean")
     return out
 
 
 def _text(value: Any, limit: int = 3000, required: bool = False) -> str:
     if not isinstance(value, str) or len(value) > limit or (required and not value.strip()):
-        raise ValueError(f'Text must contain at most {limit} characters and required fields cannot be blank')
+        raise ValueError(
+            f"Text must contain at most {limit} characters and required fields cannot be blank"
+        )
     return value
 
 
@@ -98,19 +198,22 @@ def _font(size: int, path: str | None) -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(candidate, size)
         except OSError:
             continue
-    raise ValueError('No Unicode font available; configure a readable TTF/OTF font in TinyPrint options')
+    raise ValueError(
+        "No Unicode font available; configure a readable TTF/OTF font in TinyPrint options"
+    )
 
 
-def _text_block(text: str, size: int, align: str, font_path: str | None,
-                checklist: bool = False) -> Image.Image:
+def _text_block(
+    text: str, size: int, align: str, font_path: str | None, checklist: bool = False
+) -> Image.Image:
     font = _font(size, font_path)
     ascent, descent = font.getmetrics()
     step = ascent + descent + 5
     inset = 34 if checklist else 10
     max_width = WIDTH - inset - 10
     lines: list[tuple[str, bool]] = []
-    for paragraph in text.expandtabs(4).split('\n'):
-        pending = paragraph.rstrip('\r')
+    for paragraph in text.expandtabs(4).split("\n"):
+        pending = paragraph.rstrip("\r")
         first = True
         while pending:
             low, high = 1, min(len(pending), 512)
@@ -122,25 +225,25 @@ def _text_block(text: str, size: int, align: str, font_path: str | None,
                     high = middle - 1
             cut = low
             if cut < len(pending):
-                split = pending.rfind(' ', 0, cut + 1)
+                split = pending.rfind(" ", 0, cut + 1)
                 if split > 0:
                     cut = split
             lines.append((pending[:cut], checklist and first))
             first = False
-            pending = pending[cut:].lstrip(' ')
+            pending = pending[cut:].lstrip(" ")
             if len(lines) * step + 16 > MAX_ROWS:
-                raise ValueError('Rendered text exceeds 2048 rows; split the job')
+                raise ValueError("Rendered text exceeds 2048 rows; split the job")
         if first:
-            lines.append(('', False))
+            lines.append(("", False))
             if len(lines) * step + 16 > MAX_ROWS:
-                raise ValueError('Rendered text exceeds 2048 rows; split the job')
-    image = Image.new('L', (WIDTH, max(1, len(lines)) * step + 16), 255)
+                raise ValueError("Rendered text exceeds 2048 rows; split the job")
+    image = Image.new("L", (WIDTH, max(1, len(lines)) * step + 16), 255)
     draw = ImageDraw.Draw(image)
     for i, (line, check) in enumerate(lines):
         x = inset
-        if not checklist and align == 'center':
+        if not checklist and align == "center":
             x = max(inset, (WIDTH - font.getlength(line)) / 2)
-        elif not checklist and align == 'right':
+        elif not checklist and align == "right":
             x = max(inset, WIDTH - 10 - font.getlength(line))
         y = 8 + i * step
         if check:
@@ -151,19 +254,23 @@ def _text_block(text: str, size: int, align: str, font_path: str | None,
 
 def _qr(text: str, options: dict[str, Any]) -> Image.Image:
     _text(text, 500, required=True)
-    levels = {'M': qrcode.constants.ERROR_CORRECT_M, 'Q': qrcode.constants.ERROR_CORRECT_Q, 'H': qrcode.constants.ERROR_CORRECT_H}
-    code = qrcode.QRCode(error_correction=levels[options['qr_correction']], box_size=1, border=4)
+    levels = {
+        "M": qrcode.constants.ERROR_CORRECT_M,
+        "Q": qrcode.constants.ERROR_CORRECT_Q,
+        "H": qrcode.constants.ERROR_CORRECT_H,
+    }
+    code = qrcode.QRCode(error_correction=levels[options["qr_correction"]], box_size=1, border=4)
     code.add_data(text)
     try:
         code.make(fit=True)
     except qrcode.exceptions.DataOverflowError as error:
-        raise ValueError('QR data is too large') from error
-    image = code.make_image(fill_color='black', back_color='white').convert('L')
-    scale = options['qr_size'] // image.width
+        raise ValueError("QR data is too large") from error
+    image = code.make_image(fill_color="black", back_color="white").convert("L")
+    scale = options["qr_size"] // image.width
     if scale < 3:
-        raise ValueError('QR modules would be too small; enlarge the QR or shorten its data')
+        raise ValueError("QR modules would be too small; enlarge the QR or shorten its data")
     image = image.resize((image.width * scale, image.height * scale), Image.Resampling.NEAREST)
-    canvas = Image.new('L', (WIDTH, image.height), 255)
+    canvas = Image.new("L", (WIDTH, image.height), 255)
     canvas.paste(image, ((WIDTH - image.width) // 2, 0))
     return canvas
 
@@ -171,8 +278,8 @@ def _qr(text: str, options: dict[str, Any]) -> Image.Image:
 def _stack(parts: list[Image.Image], border: bool) -> Image.Image:
     height = sum(p.height for p in parts) + 16
     if not parts or height > MAX_ROWS:
-        raise ValueError('Label exceeds 2048 rows; split the job')
-    image = Image.new('L', (WIDTH, height), 255)
+        raise ValueError("Label exceeds 2048 rows; split the job")
+    image = Image.new("L", (WIDTH, height), 255)
     y = 8
     for part in parts:
         image.paste(part, (0, y))
@@ -180,150 +287,193 @@ def _stack(parts: list[Image.Image], border: bool) -> Image.Image:
     if border:
         ImageDraw.Draw(image).rectangle((2, 2, WIDTH - 3, height - 3), outline=0, width=2)
     # Text and QR are never inverted, rescaled or dithered using photo settings.
-    return image.point(lambda p: 255 if p >= 160 else 0, mode='1')
+    return image.point(lambda p: 255 if p >= 160 else 0, mode="1")
 
 
-def _label(template: str, fields: Any, options: dict[str, Any], font_path: str | None) -> Image.Image:
+def _label(
+    template: str, fields: Any, options: dict[str, Any], font_path: str | None
+) -> Image.Image:
     if not isinstance(template, str) or template not in TEMPLATES or not isinstance(fields, dict):
-        raise ValueError('Unknown template or invalid fields')
+        raise ValueError("Unknown template or invalid fields")
     spec = TEMPLATES[template]
-    if fields.keys() - set(spec['fields']):
-        raise ValueError('Unknown template field')
-    for key in spec['fields']:
-        _text(fields.get(key, ''), 500 if key == 'qr' else 3000, key in spec['required'])
-    if sum(len(v) for k, v in fields.items() if k != 'qr') > 3000:
-        raise ValueError('Combined label text exceeds 3000 characters')
-    size = options['font_size']
+    if fields.keys() - set(spec["fields"]):
+        raise ValueError("Unknown template field")
+    for key in spec["fields"]:
+        _text(fields.get(key, ""), 500 if key == "qr" else 3000, key in spec["required"])
+    if sum(len(v) for k, v in fields.items() if k != "qr") > 3000:
+        raise ValueError("Combined label text exceeds 3000 characters")
+    size = options["font_size"]
     parts = []
-    if title := fields.get('title'):
-        parts.append(_text_block(title, min(64, size + (14 if template == 'heading' else 6)), 'center', font_path))
-    if location := fields.get('location'):
-        parts.append(_text_block(location, size, options['align'], font_path))
-    if template == 'spool_label':
-        names = {'material': 'Материал', 'color': 'Цвет', 'weight': 'Остаток', 'nozzle': 'Сопло'}
-        rows = [f'{name}: {fields[key]}' for key, name in names.items() if fields.get(key)]
+    if title := fields.get("title"):
+        parts.append(
+            _text_block(
+                title, min(64, size + (14 if template == "heading" else 6)), "center", font_path
+            )
+        )
+    if location := fields.get("location"):
+        parts.append(_text_block(location, size, options["align"], font_path))
+    if template == "spool_label":
+        names = {"material": "Материал", "color": "Цвет", "weight": "Остаток", "nozzle": "Сопло"}
+        rows = [f"{name}: {fields[key]}" for key, name in names.items() if fields.get(key)]
         if rows:
-            parts.append(_text_block('\n'.join(rows), size, options['align'], font_path))
-    if text := fields.get('text'):
-        parts.append(_text_block(text, size, options['align'], font_path, template == 'checklist'))
-    if data := fields.get('qr'):
+            parts.append(_text_block("\n".join(rows), size, options["align"], font_path))
+    if text := fields.get("text"):
+        parts.append(_text_block(text, size, options["align"], font_path, template == "checklist"))
+    if data := fields.get("qr"):
         parts.append(_qr(data, options))
-    if footer := fields.get('footer'):
-        parts.append(_text_block(footer, max(12, size - 4), 'center', font_path))
-    return _stack(parts, options['border'])
+    if footer := fields.get("footer"):
+        parts.append(_text_block(footer, max(12, size - 4), "center", font_path))
+    return _stack(parts, options["border"])
 
 
 def _load_image(doc: dict[str, Any], allowed: Callable[[str], bool] | None) -> Image.Image:
-    if ('path' in doc) == ('image_base64' in doc):
-        raise ValueError('Supply exactly one image path or image_base64')
-    if 'path' in doc:
-        path = _text(doc['path'], 1024, required=True)
+    if ("path" in doc) == ("image_base64" in doc):
+        raise ValueError("Supply exactly one image path or image_base64")
+    if "path" in doc:
+        path = _text(doc["path"], 1024, required=True)
         if allowed is None or not allowed(path):
-            raise ValueError('Image is outside allowed Home Assistant paths')
+            raise ValueError("Image is outside allowed Home Assistant paths")
         if not Path(path).is_file():
-            raise ValueError('Image must be a regular file')
+            raise ValueError("Image must be a regular file")
         # Bounded read remains bounded if a file grows between stat and read.
         try:
-            with Path(path).open('rb') as handle:
+            with Path(path).open("rb") as handle:
                 raw = handle.read(MAX_FILE_BYTES + 1)
         except OSError as error:
-            raise ValueError('Not a readable image') from error
+            raise ValueError("Not a readable image") from error
     else:
-        value = doc['image_base64']
+        value = doc["image_base64"]
         if not isinstance(value, str) or len(value) > MAX_BASE64 + 64:
-            raise ValueError('Image exceeds 4 MiB')
-        if value.startswith('data:'):
-            header, sep, value = value.partition(',')
-            if not sep or header not in {f'data:image/{fmt};base64' for fmt in ('png', 'jpeg', 'webp', 'gif', 'bmp')}:
-                raise ValueError('Unsupported image data URL')
+            raise ValueError("Image exceeds 4 MiB")
+        if value.startswith("data:"):
+            header, sep, value = value.partition(",")
+            if not sep or header not in {
+                f"data:image/{fmt};base64" for fmt in ("png", "jpeg", "webp", "gif", "bmp")
+            }:
+                raise ValueError("Unsupported image data URL")
         if len(value) > MAX_BASE64:
-            raise ValueError('Image exceeds 4 MiB')
+            raise ValueError("Image exceeds 4 MiB")
         try:
             raw = base64.b64decode(value, validate=True)
         except (ValueError, binascii.Error) as error:
-            raise ValueError('Invalid image_base64') from error
+            raise ValueError("Invalid image_base64") from error
     if len(raw) > MAX_FILE_BYTES:
-        raise ValueError('Image exceeds 4 MiB')
+        raise ValueError("Image exceeds 4 MiB")
     try:
         with Image.open(io.BytesIO(raw)) as source:
             if source.width * source.height > MAX_SOURCE_PIXELS:
-                raise ValueError('Source image exceeds 4 million pixels')
-            image = ImageOps.exif_transpose(source).convert('RGBA')
-    except (OSError, SyntaxError, EOFError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
-        raise ValueError('Not a readable image') from error
-    canvas = Image.new('RGBA', image.size, 'white')
+                raise ValueError("Source image exceeds 4 million pixels")
+            image = ImageOps.exif_transpose(source).convert("RGBA")
+    except (
+        OSError,
+        SyntaxError,
+        EOFError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as error:
+        raise ValueError("Not a readable image") from error
+    canvas = Image.new("RGBA", image.size, "white")
     canvas.alpha_composite(image)
-    return canvas.convert('L')
+    return canvas.convert("L")
 
 
-def _image(doc: dict[str, Any], options: dict[str, Any], allowed: Callable[[str], bool] | None) -> Image.Image:
+def _image(
+    doc: dict[str, Any], options: dict[str, Any], allowed: Callable[[str], bool] | None
+) -> Image.Image:
     image = _load_image(doc, allowed)
-    if options['rotate']:
-        image = image.rotate(-options['rotate'], expand=True)
-    width = options['width'] if options['fit'] == 'width' else min(options['width'], image.width)
+    if options["rotate"]:
+        image = image.rotate(-options["rotate"], expand=True)
+    width = options["width"] if options["fit"] == "width" else min(options["width"], image.width)
     height = max(1, round(image.height * width / image.width))
     if height > MAX_ROWS:
-        raise ValueError('Scaled image exceeds 2048 rows')
+        raise ValueError("Scaled image exceeds 2048 rows")
     image = image.resize((width, height), Image.Resampling.LANCZOS)
-    for cls, key in ((ImageEnhance.Brightness, 'brightness'), (ImageEnhance.Contrast, 'contrast'), (ImageEnhance.Sharpness, 'sharpness')):
+    for cls, key in (
+        (ImageEnhance.Brightness, "brightness"),
+        (ImageEnhance.Contrast, "contrast"),
+        (ImageEnhance.Sharpness, "sharpness"),
+    ):
         image = cls(image).enhance(options[key])
-    if options['invert']:
+    if options["invert"]:
         image = ImageOps.invert(image)
-    threshold = options['threshold']
-    if options['method'] == 'threshold':
-        image = image.point(lambda p: 255 if p >= threshold else 0, mode='1')
-    elif options['method'] == 'floyd_steinberg':
-        image = image.point(lambda p: max(0, min(255, p + 128 - threshold))).convert('1', dither=Image.Dither.FLOYDSTEINBERG)
+    threshold = options["threshold"]
+    if options["method"] == "threshold":
+        image = image.point(lambda p: 255 if p >= threshold else 0, mode="1")
+    elif options["method"] == "floyd_steinberg":
+        image = image.point(lambda p: max(0, min(255, p + 128 - threshold))).convert(
+            "1", dither=Image.Dither.FLOYDSTEINBERG
+        )
     else:
         source = image.tobytes()
         result = bytearray(len(source))
         for y in range(height):
             row = _BAYER[y % 4]
             for x in range(width):
-                limit = (row[x % 4] + .5) * 16 + threshold - 128
+                limit = (row[x % 4] + 0.5) * 16 + threshold - 128
                 result[y * width + x] = 255 if source[y * width + x] >= limit else 0
-        image = Image.frombytes('L', (width, height), bytes(result)).convert('1', dither=Image.Dither.NONE)
-    canvas = Image.new('1', (WIDTH, height), 1)
+        image = Image.frombytes("L", (width, height), bytes(result)).convert(
+            "1", dither=Image.Dither.NONE
+        )
+    canvas = Image.new("1", (WIDTH, height), 1)
     canvas.paste(image, ((WIDTH - width) // 2, 0))
     return canvas
 
 
-def render_document(document: Any, font_path: str | None = None,
-                    is_allowed_path: Callable[[str], bool] | None = None) -> Image.Image:
+def render_document(
+    document: Any,
+    font_path: str | None = None,
+    is_allowed_path: Callable[[str], bool] | None = None,
+) -> Image.Image:
     """Render a validated structured document, never making a Bluetooth connection."""
-    if not isinstance(document, dict) or not isinstance(document.get('kind'), str):
-        raise ValueError('Document must have a kind')
-    kind = document['kind']
-    keys = {'text': {'text'}, 'qr': {'text'}, 'image': {'path', 'image_base64'}, 'template': {'template', 'fields'}}
-    if kind not in keys or document.keys() - (keys[kind] | {'kind', 'options'}):
-        raise ValueError('Unknown document kind or field')
-    options = normalize_options(document.get('options'))
-    if kind == 'image':
+    if not isinstance(document, dict) or not isinstance(document.get("kind"), str):
+        raise ValueError("Document must have a kind")
+    kind = document["kind"]
+    keys = {
+        "text": {"text"},
+        "qr": {"text"},
+        "image": {"path", "image_base64"},
+        "template": {"template", "fields"},
+    }
+    if kind not in keys or document.keys() - (keys[kind] | {"kind", "options"}):
+        raise ValueError("Unknown document kind or field")
+    options = normalize_options(document.get("options"))
+    if kind == "image":
         return _image(document, options, is_allowed_path)
-    if kind == 'qr':
-        return _stack([_qr(document.get('text'), options)], options['border'])
+    if kind == "qr":
+        return _stack([_qr(document.get("text"), options)], options["border"])
     # Authorization applies to explicit font files too, before ImageFont reads them.
-    if font_path and (Path(font_path).suffix.lower() not in {'.ttf', '.otf'} or is_allowed_path is None or not is_allowed_path(font_path)):
-        raise ValueError('Font must be a TTF/OTF file in an allowed Home Assistant path')
-    if kind == 'text':
-        text = _text(document.get('text'), required=True)
-        return _stack([_text_block(text, options['font_size'], options['align'], font_path)], options['border'])
-    return _label(document.get('template'), document.get('fields', {}), options, font_path)
+    if font_path and (
+        Path(font_path).suffix.lower() not in {".ttf", ".otf"}
+        or is_allowed_path is None
+        or not is_allowed_path(font_path)
+    ):
+        raise ValueError("Font must be a TTF/OTF file in an allowed Home Assistant path")
+    if kind == "text":
+        text = _text(document.get("text"), required=True)
+        return _stack(
+            [_text_block(text, options["font_size"], options["align"], font_path)],
+            options["border"],
+        )
+    return _label(document.get("template"), document.get("fields", {}), options, font_path)
 
 
 def bitmap(image: Image.Image) -> tuple[bytes, int]:
     """Return ink=1, MSB-first rows, matching the original transport contract."""
     if image.width != WIDTH or not 1 <= image.height <= MAX_ROWS:
-        raise ValueError('Output must be 384 dots wide and 1..2048 rows tall')
-    return image.convert('1', dither=Image.Dither.NONE).tobytes().translate(_INVERT), image.height
+        raise ValueError("Output must be 384 dots wide and 1..2048 rows tall")
+    return image.convert("1", dither=Image.Dither.NONE).tobytes().translate(_INVERT), image.height
 
 
 def preview_result(image: Image.Image) -> dict[str, Any]:
     """Return an in-memory PNG; no public file, history or persistent image state."""
     data, height = bitmap(image)
     output = io.BytesIO()
-    image.save(output, format='PNG')
-    return {'png_base64': base64.b64encode(output.getvalue()).decode('ascii'),
-            'width': WIDTH, 'height': height, 'bitmap_sha256': hashlib.sha256(data).hexdigest(),
-            'ink_percent': round(100 * sum(x.bit_count() for x in data) / (WIDTH * height), 2),
-            'confirmation': 'preview_only'}
+    image.save(output, format="PNG")
+    return {
+        "png_base64": base64.b64encode(output.getvalue()).decode("ascii"),
+        "width": WIDTH,
+        "height": height,
+        "bitmap_sha256": hashlib.sha256(data).hexdigest(),
+        "ink_percent": round(100 * sum(x.bit_count() for x in data) / (WIDTH * height), 2),
+        "confirmation": "preview_only",
+    }

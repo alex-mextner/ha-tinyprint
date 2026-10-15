@@ -6,7 +6,7 @@ from .const import DOMAIN
 async def async_get_config_entry_diagnostics(hass, entry):
     printer = hass.data[DOMAIN][entry.entry_id]
     return {
-        "version": "0.1.0",
+        "version": "0.2.0",
         "status": printer.status,
         "last_attempt": printer.last_attempt,
         "last_result": printer.last_result,
