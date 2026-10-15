@@ -2,7 +2,7 @@ print_text:
   fields:
     text:
       required: true
-      example: "Hello from Home Assistant"
+      example: Hello from Home Assistant
       selector:
         text:
           multiline: true
@@ -21,7 +21,7 @@ print_qr:
   fields:
     text:
       required: true
-      example: "https://www.home-assistant.io/"
+      example: https://www.home-assistant.io/
       selector:
         text: {}
     device_id:
@@ -32,10 +32,106 @@ print_image:
   fields:
     path:
       required: true
-      example: "/config/www/label.png"
+      example: /config/www/label.png
       selector:
         text: {}
     device_id:
       selector:
         device:
           integration: tinyprint
+preview:
+  name: Предпросмотр
+  description: Подготовить финальный растр без подключения к принтеру. Требуется response_variable.
+  fields:
+    document:
+      required: true
+      example:
+        kind: qr
+        text: https://example.com
+      selector:
+        object: {}
+      name: 'Макет: kind, поля и options'
+    device_id:
+      selector:
+        device:
+          integration: tinyprint
+      name: Принтер
+print_document:
+  name: Напечатать макет
+  description: Печать текста, QR, шаблона или изображения с общими настройками. Только
+    администратор или доверенная автоматизация.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tinyprint
+      name: Принтер
+    document:
+      required: true
+      selector:
+        object: {}
+      name: 'Макет: kind, поля и options'
+    expected_sha256:
+      selector:
+        text: {}
+      name: Хеш растра из предпросмотра (необязательно)
+print_template:
+  name: Напечатать шаблон
+  description: Печать одного из готовых шаблонов с полями и настройками.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tinyprint
+      name: Принтер
+    template:
+      required: true
+      selector:
+        select:
+          options:
+          - note
+          - heading
+          - checklist
+          - qr_label
+          - storage_label
+          - spool_label
+      name: Шаблон
+    fields:
+      selector:
+        object: {}
+      name: Поля шаблона
+    options:
+      selector:
+        object: {}
+      name: Настройки отображения
+    expected_sha256:
+      selector:
+        text: {}
+      name: Хеш растра из предпросмотра (необязательно)
+printer_info:
+  name: Состояние и каталог
+  description: Получить принтеры, шаблоны и пресеты. Не подключается к принтеру. Требуется
+    response_variable.
+diagnose:
+  name: Проверить GATT
+  description: Подключиться и прочитать характеристики без печати и без перезапуска
+    Bluetooth.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tinyprint
+      name: Принтер
+cancel:
+  name: Остановить задание
+  description: Остановить текущую передачу. Уже переданные данные отменить нельзя.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tinyprint
+      name: Принтер
