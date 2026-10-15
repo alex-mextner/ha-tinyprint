@@ -6,8 +6,12 @@ from typing import Any
 
 from homeassistant.exceptions import HomeAssistantError
 
+PRINT_CANCELLED = "Printer job was cancelled; any data already sent cannot be recalled"
 
-async def run_owned_job(printer: Any, coroutine: Coroutine) -> dict[str, Any]:
+
+async def run_owned_job(
+    printer: Any, coroutine: Coroutine, cancelled_message: str = PRINT_CANCELLED
+) -> dict[str, Any]:
     """Keep task ownership inside the printer and propagate caller cancellation."""
     task = printer.hass.async_create_task(coroutine, "TinyPrint print job")
     printer.task = task
@@ -18,6 +22,6 @@ async def run_owned_job(printer: Any, coroutine: Coroutine) -> dict[str, Any]:
             task.cancel()
             await asyncio.wait({task})
             raise
-        raise HomeAssistantError("Print cancelled because the integration was unloaded") from None
+        raise HomeAssistantError(cancelled_message) from None
     finally:
         printer.task = None

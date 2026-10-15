@@ -182,6 +182,10 @@ class StudioPrinter(TinyPrintPrinter):
         except asyncio.CancelledError as error:
             self.failed(error)
             raise
+        except HomeAssistantError as error:
+            # Already user-facing (e.g. printer not visible); keep the actionable text.
+            self.failed(error)
+            raise
         except Exception as error:
             failure_phase = self.last_result["phase"]
             self.failed(error)
@@ -206,7 +210,9 @@ class StudioPrinter(TinyPrintPrinter):
         if self.lock.locked():
             raise ServiceValidationError("Printer is busy; wait or cancel the current job")
         async with self.lock:
-            return await run_owned_job(self, self._diagnose())
+            return await run_owned_job(
+                self, self._diagnose(), "Printer diagnostic was cancelled; no print was sent"
+            )
 
     async def _diagnose(self) -> dict[str, Any]:
         self.begin()
@@ -243,6 +249,10 @@ class StudioPrinter(TinyPrintPrinter):
             self.phase("diagnosed", "idle")
             return dict(self.last_result)
         except asyncio.CancelledError as error:
+            self.failed(error)
+            raise
+        except HomeAssistantError as error:
+            # Already user-facing (e.g. printer not visible); keep the actionable text.
             self.failed(error)
             raise
         except Exception as error:

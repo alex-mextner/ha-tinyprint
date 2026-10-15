@@ -91,9 +91,7 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         from custom_components.tinyprint.diagnostics import async_get_config_entry_diagnostics
 
         self.hass.data["tinyprint"] = {
-            "one": SimpleNamespace(
-                status="idle", last_attempt=None, last_result={}, font_path=None
-            )
+            "one": SimpleNamespace(status="idle", last_attempt=None, last_result={}, font_path=None)
         }
         report = await async_get_config_entry_diagnostics(
             self.hass, SimpleNamespace(entry_id="one")
@@ -221,6 +219,98 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(printer.last_result["bytes_written"], 0)
         self.assertNotIn("PRIVATE CONTENT", "\n".join(logs.output))
         self.assertEqual(printer.status, "error")
+
+    async def test_user_cancel_reports_neutral_reason_and_releases_connection(self):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None)
+        entered = asyncio.Event()
+        client = SimpleNamespace(is_connected=True, disconnect=AsyncMock())
+
+        async def transmit(*args, **kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+        with (
+            patch.object(printer, "_render", return_value=(bytes(48), 1)),
+            patch(
+                "custom_components.tinyprint.studio_runtime.bluetooth.async_ble_device_from_address",
+                return_value=object(),
+            ),
+            patch(
+                "custom_components.tinyprint.studio_runtime.establish_connection",
+                new=AsyncMock(return_value=client),
+            ),
+            patch("custom_components.tinyprint.studio_runtime.send_bitmap", new=transmit),
+        ):
+            caller = asyncio.create_task(printer.async_print("text", "Hello"))
+            await asyncio.wait_for(entered.wait(), 2)
+            await printer.async_cancel()
+            with self.assertRaises(HomeAssistantError) as raised:
+                await caller
+        self.assertNotIn("unloaded", str(raised.exception))
+        self.assertIn("cannot be recalled", str(raised.exception))
+        self.assertFalse(caller.cancelled())
+        self.assertIsNone(printer.task)
+        self.assertEqual(printer.status, "error")
+        self.assertTrue(printer.last_result.get("failure_phase"))
+        client.disconnect.assert_awaited()
+
+    async def test_diagnose_cancel_says_no_print_was_sent(self):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None)
+        entered = asyncio.Event()
+
+        async def connect(*args, **kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+        with (
+            patch(
+                "custom_components.tinyprint.studio_runtime.bluetooth.async_ble_device_from_address",
+                return_value=object(),
+            ),
+            patch("custom_components.tinyprint.studio_runtime.establish_connection", new=connect),
+        ):
+            caller = asyncio.create_task(printer.async_diagnose())
+            await asyncio.wait_for(entered.wait(), 2)
+            await printer.async_cancel()
+            with self.assertRaises(HomeAssistantError) as raised:
+                await caller
+        self.assertIn("no print was sent", str(raised.exception))
+        self.assertNotIn("recalled", str(raised.exception))
+        self.assertIsNone(printer.task)
+
+    async def _assert_invisible_printer_message_kept(self, start):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None)
+        with (
+            patch.object(printer, "_render", return_value=(bytes(48), 1)),
+            patch(
+                "custom_components.tinyprint.studio_runtime.bluetooth.async_ble_device_from_address",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.tinyprint.studio_runtime.establish_connection", new=AsyncMock()
+            ) as connect,
+        ):
+            with self.assertRaises(HomeAssistantError) as raised:
+                await start(printer)
+        self.assertIn("not visible", str(raised.exception))
+        self.assertEqual(printer.status, "error")
+        self.assertEqual(printer.last_result["failure_phase"], "connecting_gatt")
+        self.assertEqual(printer.last_result["bytes_written"], 0)
+        connect.assert_not_called()
+
+    async def test_print_keeps_invisible_printer_message(self):
+        await self._assert_invisible_printer_message_kept(
+            lambda printer: printer.async_print("text", "Hello")
+        )
+
+    async def test_diagnose_keeps_invisible_printer_message(self):
+        await self._assert_invisible_printer_message_kept(lambda printer: printer.async_diagnose())
 
     async def test_preview_hash_mismatch_fails_before_bluetooth(self):
         from custom_components.tinyprint.studio_runtime import StudioPrinter
