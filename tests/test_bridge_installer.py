@@ -381,6 +381,20 @@ def test_symlinked_prefix_or_config_dir_is_refused(home, which):
     assert (real / "app" / "bridge" / "precious.txt").read_text() == "mine"
 
 
+@pytest.mark.parametrize("name", ["token", "bridge.env"])
+@pytest.mark.parametrize("dangling", [True, False])
+def test_symlinked_token_or_env_file_is_refused_and_never_written_through(home, name, dangling):
+    config, _data = paths(home)
+    config.mkdir(parents=True)
+    victim = home / "victim.txt"
+    if not dangling:
+        victim.write_text("")
+    (config / name).symlink_to(victim)
+    result = run(home, *COMMON, check=False)
+    assert result.returncode == 2 and "symlink" in result.stderr
+    assert not victim.exists() or victim.read_text() == ""
+
+
 def test_symlinked_app_directory_is_refused_and_its_target_untouched(home):
     _config, data = paths(home)
     victim = home / "victim"

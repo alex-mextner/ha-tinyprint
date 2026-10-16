@@ -133,6 +133,10 @@ Never paste the token into the command line itself (shell history); read it from
 * One hardware job at a time, no queue: a second start while one is active gets `409 busy`.
 * A `job_id` that was used before (running, finished, or evicted from the retained results while
   still in the bounded recent-ids memory) gets `409 duplicate_job`. The bridge never replays a job.
+* Cancelling a `job_id` the bridge has not seen answers `404 not_found` but burns the id, so a
+  start request that was delayed on the network and arrives after its cancel gets `409
+  duplicate_job` instead of printing. Burned ids are kept in their own bounded memory (4096), so
+  cancels cannot push real jobs out of the replay guard.
 * `202` means accepted, not printed. `sent` means all ATT writes returned and the settle delay
   passed. The printer sends no "print finished" signal, so `physical_print_confirmed` stays
   `false` and `confirmation` is `transport_only`.

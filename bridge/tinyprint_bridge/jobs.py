@@ -128,6 +128,9 @@ class JobManager:
         self._pacing = dict(pacing or {})
         self._jobs: OrderedDict[str, _Job] = OrderedDict()
         self._seen: OrderedDict[str, None] = OrderedDict()
+        # Ids cancelled before they were ever started live apart from `_seen`, so that blind
+        # cancels cannot push the memory of real jobs (the replay guard) out of its ring.
+        self._cancelled_early: OrderedDict[str, None] = OrderedDict()
         self._active: _Job | None = None
         self._closing = False
 
@@ -171,16 +174,26 @@ class JobManager:
         job.task = asyncio.create_task(self._run(job, work))
         job.task.add_done_callback(functools.partial(self._on_task_done, job))
 
-    def _begin(self, job_id: str, kind: str) -> _Job:
-        if self._closing:
-            raise bridge_wire.WireError("busy", "The bridge is shutting down", 409)
-        if job_id in self._seen:
-            raise bridge_wire.WireError("duplicate_job", "This job id was already used", 409)
-        if self._active is not None:
-            raise bridge_wire.WireError("busy", "Another job is using the printer", 409)
+    def _remember(self, job_id: str) -> None:
         self._seen[job_id] = None
         while len(self._seen) > self._max_seen:
             self._seen.popitem(last=False)
+
+    def _burn(self, job_id: str) -> None:
+        self._cancelled_early[job_id] = None
+        while len(self._cancelled_early) > self._max_seen:
+            self._cancelled_early.popitem(last=False)
+
+    def _begin(self, job_id: str, kind: str) -> _Job:
+        if self._closing:
+            raise bridge_wire.WireError("busy", "The bridge is shutting down", 409)
+        if job_id in self._seen or job_id in self._cancelled_early:
+            raise bridge_wire.WireError(
+                "duplicate_job", "This job id was already used or cancelled", 409
+            )
+        if self._active is not None:
+            raise bridge_wire.WireError("busy", "Another job is using the printer", 409)
+        self._remember(job_id)
         job = _Job(job_id, kind, time.monotonic())
         self._jobs[job_id] = job
         self._active = job
@@ -345,7 +358,12 @@ class JobManager:
     # -- cancelling ------------------------------------------------------------------------
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel and wait (bounded) for the worker and its socket cleanup to finish."""
-        job = self._find(job_id)
+        job = self._jobs.get(job_id)
+        if job is None:
+            # The start request may still be on its way (a client that lost the answer cancels
+            # blind): burn the id so that a late arrival is refused instead of printing.
+            self._burn(job_id)
+            raise bridge_wire.WireError("not_found", "No such job", 404)
         if job.terminal and job.finalized:
             return job.view(time.monotonic())
         await self._cancel_job(job)

@@ -198,6 +198,32 @@ async def test_cancel_unknown_job_is_not_found():
     assert (caught.value.code, caught.value.status) == ("not_found", 404)
 
 
+async def test_a_start_that_arrives_after_its_cancel_is_refused_not_run():
+    # A start request delayed on the network can land after the client already cancelled it.
+    link = fake.FakeLink(fake.FakeGattServer())
+    manager = manager_for(link)
+    with pytest.raises(wire.WireError) as cancelled:
+        await manager.cancel("job-late0001")
+    assert (cancelled.value.code, cancelled.value.status) == ("not_found", 404)
+    with pytest.raises(wire.WireError) as caught:
+        manager.start_print(print_request("job-late0001"))
+    assert caught.value.code == "duplicate_job"
+    assert link.connects == 0 and not manager.busy
+
+
+async def test_blind_cancels_never_evict_the_memory_of_real_jobs():
+    link = fake.FakeLink(fake.FakeGattServer())
+    manager = manager_for(link, max_seen_ids=2)
+    manager.start_print(print_request("job-real0001"))
+    await settle(manager, "job-real0001")
+    for number in range(50):
+        with pytest.raises(wire.WireError):
+            await manager.cancel(f"job-blind{number:04d}")
+    with pytest.raises(wire.WireError) as caught:
+        manager.start_print(print_request("job-real0001"))
+    assert caught.value.code == "duplicate_job"
+
+
 async def test_cancel_finished_job_returns_final_view_unchanged():
     manager = manager_for(fake.FakeLink(fake.FakeGattServer()))
     manager.start_print(print_request())

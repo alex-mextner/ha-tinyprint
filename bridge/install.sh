@@ -97,11 +97,13 @@ for mac in "$printer_mac" "$adapter_mac"; do
     case "$mac" in 00:00:00:00:00:00) die "a MAC address must not be the null address" ;; esac
 done
 
-# The code tree is replaced with rm -rf, so only ever replace a tree this installer made, and never
-# one reached through a symlink.
-for dir in "$prefix" "${prefix}/app" "$config_dir"; do
-    [ ! -L "$dir" ] || die "${dir} is a symlink; refusing to install through it"
+# Every path below is written through: the app tree is rm -rf'd and recreated, the token and env
+# files are rewritten. A write through a symlink (even a dangling one) would land elsewhere, so
+# refuse any of them being one.
+for path in "$prefix" "${prefix}/app" "$config_dir" "$token_file" "$env_file"; do
+    [ ! -L "$path" ] || die "${path} is a symlink; refusing to install through it"
 done
+# The code tree is replaced with rm -rf, so only ever replace a tree this installer made.
 app_marker="${prefix}/app/.tinyprint-bridge-app"
 if { [ -e "${prefix}/app/bridge" ] || [ -e "${prefix}/app/custom_components" ]; } && [ ! -f "$app_marker" ]; then
     die "${prefix}/app exists but was not created by this installer; refusing to replace it (choose another --prefix)"
