@@ -1,5 +1,6 @@
 """TinyPrint X6h native Home Assistant integration."""
 
+import logging
 from typing import Any
 
 import voluptuous as vol
@@ -10,10 +11,12 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
+from .bridge_client import BridgeConfigError, bridge_settings
 from .const import DOMAIN
 from .studio import async_register_studio_services, async_setup_panel
 from .studio_runtime import StudioPrinter as TinyPrintPrinter
 
+_LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.BUTTON, Platform.SENSOR]
 PRINTER_SCHEMA = vol.Schema(
     {
@@ -85,12 +88,23 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, "print_text"):
         await async_setup(hass, {})
+    bridge = bridge_error = None
+    try:
+        bridge = bridge_settings(entry.options)
+    except BridgeConfigError:
+        bridge_error = "misconfigured"
+        _LOGGER.error(
+            "TinyPrint bridge transport is selected but its options are invalid; "
+            "printing stays disabled (no Bluetooth fallback) until the options are fixed"
+        )
     runtime = TinyPrintPrinter(
         hass,
         entry.entry_id,
         entry.data["address"],
         entry.title,
         entry.options.get("font_path", entry.data.get("font_path")) or None,
+        bridge=bridge,
+        bridge_error=bridge_error,
     )
     hass.data[DOMAIN][entry.entry_id] = runtime
     try:

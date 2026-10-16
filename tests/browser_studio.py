@@ -39,11 +39,12 @@ async def service(request):
                     "rssi_raw": None,
                     "last_error": None,
                     "last_result": {},
+                    **(BRIDGE_PRINTER if MODE["bridge"] else {}),
                 }
             ],
             "templates": renderer.TEMPLATES,
             "presets": renderer.PRESETS,
-            "version": "0.2.0",
+            "version": "0.2.1",
         }
     elif name == "preview":
         image = await asyncio.to_thread(renderer.render_document, data["document"])
@@ -70,6 +71,22 @@ async def service(request):
     else:
         raise ValueError("Unknown mock service")
     return result
+
+
+MODE = {"bridge": False}
+# Bridge reachable while HA's own Bluetooth cannot see the printer (the Odroid situation).
+BRIDGE_PRINTER = {
+    "transport": {
+        "mode": "bridge",
+        "bridge_configured": True,
+        "bridge_state": "reachable",
+        "bridge_scheme": "http",
+        "bridge_checked_at": "2026-10-16T00:00:00+00:00",
+    },
+    "local_scan_only": True,
+    "visible": False,
+    "rssi_raw": -97,
+}
 
 
 async def main():
@@ -101,6 +118,7 @@ async def main():
         await page.expose_function(
             "studioService", lambda name, data: service({"name": name, "data": data})
         )
+        await page.expose_function("setBridgeMode", lambda on: MODE.update(bridge=bool(on)))
         await page.set_content(HTML)
         await page.add_script_tag(
             path=str(ROOT / "custom_components/tinyprint/frontend/tinyprint-panel.js")
@@ -201,6 +219,27 @@ async def main():
         assert await page.evaluate("window.pwned===undefined")
         assert await page.locator("#action-data img").count() == 0
         checks.append("untrusted template content rendered as text, not HTML")
+        status = page.locator("#device-status")
+        assert await status.inner_text() == "Не виден по Bluetooth"
+        assert await page.locator("#diagnose").inner_text() == "Проверить Bluetooth"
+        checks.append("native mode keeps the Bluetooth wording")
+        await page.evaluate("setBridgeMode(true)")
+        await page.locator("#refresh").click()
+        await page.wait_for_function(
+            "document.querySelector('tinyprint-panel').shadowRoot.querySelector('#device-status').textContent==='Мост доступен'"
+        )
+        assert await page.locator("#diagnose").inner_text() == "Проверить через мост"
+        diagnostic = await page.locator("#diagnostic-data").inner_text()
+        assert "local_rssi_raw" in diagnostic and '"rssi_raw"' not in diagnostic
+        assert "token" not in diagnostic.lower() and "http://" not in diagnostic
+        await page.locator("#preview").click()
+        await page.wait_for_function("!document.querySelector('tinyprint-panel').busy")
+        assert await page.locator("#print").is_enabled()
+        await page.locator("#diagnostics").evaluate("(e)=>e.open=true")
+        await page.screenshot(path=str(out / "bridge-panel.png"), full_page=True)
+        checks.append(
+            "bridge mode: reachable bridge badge, local RSSI labelled local, print usable"
+        )
         assert not errors, errors
         checks.append("zero browser JavaScript exceptions")
         await browser.close()

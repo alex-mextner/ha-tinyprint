@@ -29,10 +29,26 @@
     "step": {
       "init": {
         "title": "Printing options",
+        "description": "Bridge settings are only available to administrators. Switching back to native Bluetooth removes the stored bridge address and token.",
         "data": {
+          "transport": "Connection to the printer",
+          "bridge_url": "Bridge URL",
+          "bridge_token": "Bridge access token",
           "font_path": "Local Unicode TTF/OTF font path"
+        },
+        "data_description": {
+          "transport": "Native uses Bluetooth of this Home Assistant host or ESPHome proxies. Bridge sends the rendered label to a TinyPrint bridge on a nearby Linux host.",
+          "bridge_url": "Address of the bridge, for example http://100.64.0.5:8765. Use the Tailscale or LAN address the bridge listens on.",
+          "bridge_token": "Leave blank to keep the saved token. On the bridge host, read the file named by TINYPRINT_BRIDGE_TOKEN_FILE in bridge.env (see docs/bridge.md)"
         }
       }
+    },
+    "error": {
+      "invalid_url": "Enter an http:// or https:// address with a host and optional port, without a path, login or query",
+      "invalid_token": "The token must be at least 32 printable characters without spaces",
+      "token_required": "Enter the bridge access token",
+      "cannot_connect": "The bridge did not answer. Check that it is running and reachable from Home Assistant",
+      "invalid_auth": "The bridge rejected the access token"
     }
   },
   "entity": {
@@ -100,6 +116,14 @@
           "name": "Printer",
           "description": "Required when multiple TinyPrint printers are configured."
         }
+      }
+    }
+  },
+  "selector": {
+    "transport": {
+      "options": {
+        "native": "Native Bluetooth",
+        "bridge": "TinyPrint bridge"
       }
     }
   }

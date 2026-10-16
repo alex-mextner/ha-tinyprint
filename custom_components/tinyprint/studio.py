@@ -13,10 +13,11 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.service import async_register_admin_service
 
 from .const import DOMAIN
+from .diagnostics import transport_info
 from .studio_render import PRESETS, TEMPLATES, preview_result, render_document
 
 DATA_KEY = "tinyprint_studio"
-PANEL_VERSION = "0.2.0"
+PANEL_VERSION = "0.2.1"
 
 
 def _printer(hass: HomeAssistant, device_id: str) -> Any:
@@ -98,11 +99,19 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             device = registry.async_get_device(identifiers={(DOMAIN, printer.address)})
             info = bluetooth.async_last_service_info(hass, printer.address, connectable=True)
             present = bluetooth.async_address_present(hass, printer.address, connectable=True)
+            transport = transport_info(printer)
+            if transport["mode"] == "bridge" and hasattr(printer, "async_bridge_status"):
+                # HTTP status only (cached): never a radio connect from a diagnostics read.
+                await printer.async_bridge_status(max_age=10)
+                transport = transport_info(printer)
             printers.append(
                 {
                     "device_id": device.id if device else None,
                     "name": printer.name,
                     "status": printer.status,
+                    "transport": transport,
+                    # In bridge mode these describe HA's own radio, not the printer's reachability.
+                    "local_scan_only": transport["mode"] == "bridge",
                     "visible": present,
                     "rssi_raw": info.rssi if info else None,
                     "last_error": printer.last_error,
@@ -122,8 +131,12 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
 
     async def cancel(call: ServiceCall) -> dict[str, Any] | None:
         printer = _printer(hass, call.data["device_id"])
+        owned = getattr(printer, "task", None) is not None
         await printer.async_cancel()
-        return {"status": printer.status} if call.return_response else None
+        response = {"status": printer.status}
+        if not owned and getattr(printer, "bridge", None) is not None:
+            response.update(await printer.async_cancel_bridge_orphan())
+        return response if call.return_response else None
 
     target = {vol.Required("device_id"): str}
     digest = {vol.Optional("expected_sha256"): vol.Match(r"^[0-9a-f]{64}$")}

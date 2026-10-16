@@ -12,8 +12,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
+from .bridge_client import BridgeSettings
 from .connection import connected_client
-from .const import UPDATE_SIGNAL
+from .const import TRANSPORT_BRIDGE, TRANSPORT_NATIVE, UPDATE_SIGNAL
 from .job import run_owned_job
 from .render import render_image, render_qr, render_text, to_bitmap
 from .transport import send_bitmap
@@ -23,7 +24,15 @@ _LOGGER = logging.getLogger(__name__)
 
 class TinyPrintPrinter:
     def __init__(
-        self, hass: HomeAssistant, entry_id: str, address: str, name: str, font_path: str | None
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        address: str,
+        name: str,
+        font_path: str | None,
+        *,
+        bridge: BridgeSettings | None = None,
+        bridge_error: str | None = None,
     ) -> None:
         self.hass = hass
         self.entry_id = entry_id
@@ -36,6 +45,28 @@ class TinyPrintPrinter:
         self.last_result: dict[str, Any] = {}
         self.last_attempt: str | None = None
         self.task: asyncio.Task | None = None
+        # A selected-but-broken bridge stays "bridge" so printing fails closed, never to BLE.
+        self.bridge = bridge
+        self.bridge_error = bridge_error
+        self.transport = TRANSPORT_BRIDGE if bridge or bridge_error else TRANSPORT_NATIVE
+        self.bridge_state = (
+            "native"
+            if self.transport == TRANSPORT_NATIVE
+            else "misconfigured"
+            if bridge_error
+            else "unchecked"
+        )
+        self.bridge_checked_at: str | None = None
+
+    def transport_info(self) -> dict[str, Any]:
+        """Secret-free transport summary: no URL, host or token."""
+        return {
+            "mode": self.transport,
+            "bridge_configured": self.bridge is not None,
+            "bridge_state": self.bridge_state,
+            "bridge_scheme": self.bridge.scheme if self.bridge else None,
+            "bridge_checked_at": self.bridge_checked_at,
+        }
 
     def update(self, state: str) -> None:
         self.status = state
