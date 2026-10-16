@@ -54,6 +54,54 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["confirmation"], "preview_only")
         self.assertFalse(self.hass.data["tinyprint"])
 
+    async def test_repeated_preview_cancel_holds_slot_until_render_finishes(self):
+        renders = []
+        release = threading.Event()
+
+        def render(*args):
+            renders.append(args)
+            release.wait(5)
+            return {"confirmation": "preview_only"}
+
+        def call():
+            return asyncio.create_task(
+                self.hass.services.async_call(
+                    "tinyprint",
+                    "preview",
+                    {"document": {"kind": "qr", "text": "x"}},
+                    blocking=True,
+                    return_response=True,
+                )
+            )
+
+        async def renders_started(count):
+            while len(renders) < count:
+                await asyncio.sleep(0.01)
+
+        try:
+            with patch("custom_components.tinyprint.studio._preview", new=render):
+                first, second = call(), call()
+                await asyncio.wait_for(renders_started(2), 3)
+                first.cancel()
+                await asyncio.sleep(0.2)
+                first.cancel()
+                await asyncio.sleep(0.2)
+                self.assertFalse(first.done())
+                with self.assertRaises(ServiceValidationError):
+                    await asyncio.wait_for(call(), 2)
+                self.assertEqual(len(renders), 2)
+                release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(first, 3)
+                self.assertEqual(
+                    await asyncio.wait_for(second, 3), {"confirmation": "preview_only"}
+                )
+                self.assertEqual(
+                    await asyncio.wait_for(call(), 3), {"confirmation": "preview_only"}
+                )
+        finally:
+            release.set()
+
     async def test_printer_info_preserves_raw_rssi(self):
         self.hass.data["tinyprint"] = {
             "one": SimpleNamespace(
