@@ -49,7 +49,10 @@ characters (no spaces). `--bind`/`--port` only apply when `bridge.env` is first 
 replaces code only: an existing `bridge.env` and `token` are never overwritten, the token is never
 printed, and an installed `aiohttp` is not re-downloaded (re-runs work offline). The code tree
 `<prefix>/app` is only replaced when it carries the installer's marker file, so a wrong `--prefix`
-cannot delete someone else's `app/` directory. `--no-venv` on a fresh install needs
+cannot delete someone else's `app/` directory. Before changing anything, the installer refuses a
+prefix, `app/` or config directory, `token`, `bridge.env`, marker or unit file that is a symlink,
+not owned by you, or (directories and secrets) writable by group or others; it never chmods an
+existing directory, so tighten such a directory yourself. `--no-venv` on a fresh install needs
 `--no-systemd` (the unit points at `<prefix>/venv`).
 
 To keep the user service running when you are logged out: `loginctl enable-linger $USER`.

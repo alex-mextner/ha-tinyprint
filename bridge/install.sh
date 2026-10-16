@@ -3,7 +3,8 @@
 #
 # Installs code under <prefix>/app, config + secrets under <config-dir>, a user systemd unit.
 # Never uses sudo, never overwrites an existing bridge.env or token, never prints the token.
-# Re-running updates the code tree only.
+# Re-running updates the code tree only. Refuses (before changing anything) managed directories and
+# files that are symlinks, foreign-owned or writable by group/others; never chmods existing dirs.
 set -eu
 
 usage() {
@@ -97,12 +98,46 @@ for mac in "$printer_mac" "$adapter_mac"; do
     case "$mac" in 00:00:00:00:00:00) die "a MAC address must not be the null address" ;; esac
 done
 
-# The code tree is replaced with rm -rf, so only ever replace a tree this installer made, and never
-# one reached through a symlink.
+others_can_write() {
+    [ -n "$(find "$1" -maxdepth 0 \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]
+}
+
+# A managed directory that someone else can write to (or reach through a symlink) could have its
+# marker or secrets planted, so it is refused rather than trusted. Missing ones are created 0700.
+check_dir() {
+    if [ ! -e "$1" ] && [ ! -L "$1" ]; then return 0; fi
+    if [ -L "$1" ]; then die "$1 is a symlink; refusing to install through it"; fi
+    if [ ! -d "$1" ]; then die "$1 exists but is not a directory"; fi
+    if [ ! -O "$1" ]; then die "$1 is not owned by you (UID $(id -u)); refusing to install into it"; fi
+    if others_can_write "$1"; then
+        die "$1 is writable by group or others; refusing to trust it (tighten it yourself, e.g. chmod go-w; the installer never changes the mode of an existing directory)"
+    fi
+}
+
+# Files are written with > and chmod-ed, both of which follow symlinks; STRICT=1 also refuses
+# contents (secrets) that someone else could have written.
+check_file() {
+    if [ ! -e "$1" ] && [ ! -L "$1" ]; then return 0; fi
+    if [ -L "$1" ]; then die "$1 is a symlink; refusing to follow it"; fi
+    if [ ! -f "$1" ]; then die "$1 exists but is not a regular file"; fi
+    if [ ! -O "$1" ]; then die "$1 is not owned by you (UID $(id -u)); refusing to use it"; fi
+    if [ "$2" -eq 1 ] && others_can_write "$1"; then
+        die "$1 is writable by group or others; refusing to trust its contents"
+    fi
+}
+
+# The code tree is replaced with rm -rf, so only ever replace a tree this installer made, in
+# directories nobody else controls.
 for dir in "$prefix" "${prefix}/app" "$config_dir"; do
-    [ ! -L "$dir" ] || die "${dir} is a symlink; refusing to install through it"
+    check_dir "$dir"
 done
+check_file "$token_file" 1
+check_file "$env_file" 1
 app_marker="${prefix}/app/.tinyprint-bridge-app"
+check_file "$app_marker" 0
+unit_dir="${HOME}/.config/systemd/user"
+unit_file="${unit_dir}/tinyprint-bridge.service"
+if [ "$use_systemd" -eq 1 ]; then check_file "$unit_file" 0; fi
 if { [ -e "${prefix}/app/bridge" ] || [ -e "${prefix}/app/custom_components" ]; } && [ ! -f "$app_marker" ]; then
     die "${prefix}/app exists but was not created by this installer; refusing to replace it (choose another --prefix)"
 fi
@@ -126,6 +161,10 @@ mkdir -p "$prefix" "$config_dir"
 # Code is replaced wholesale; secrets and config are never touched below this block.
 app="${prefix}/app"
 mkdir -p "$app"
+# Re-check after creation: a directory that appeared since validation must pass the same rules.
+for dir in "$prefix" "$app" "$config_dir"; do
+    check_dir "$dir"
+done
 touch "$app_marker"
 rm -rf "${app}/bridge" "${app}/custom_components"
 mkdir -p "${app}/bridge" "${app}/custom_components/tinyprint"
@@ -171,13 +210,12 @@ if [ "$use_venv" -eq 1 ]; then
 fi
 
 if [ "$use_systemd" -eq 1 ]; then
-    unit_dir="${HOME}/.config/systemd/user"
     mkdir -p "$unit_dir"
     # The shipped unit uses the default locations; rewrite them for custom directories.
     sed -e "s|%h/.local/share/tinyprint-bridge|${prefix}|g" \
         -e "s|%h/.config/tinyprint-bridge|${config_dir}|g" \
-        "${script_dir}/tinyprint-bridge.service" >"${unit_dir}/tinyprint-bridge.service"
-    chmod 644 "${unit_dir}/tinyprint-bridge.service"
+        "${script_dir}/tinyprint-bridge.service" >"$unit_file"
+    chmod 644 "$unit_file"
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user daemon-reload
         systemctl --user enable tinyprint-bridge.service
