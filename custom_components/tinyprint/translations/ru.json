@@ -22,7 +22,9 @@
     "abort": {
       "already_configured": "Этот принтер уже добавлен",
       "not_supported": "Это устройство не является поддерживаемым принтером X6h",
-      "invalid_address": "Некорректный Bluetooth MAC-адрес в конфигурации."
+      "invalid_address": "Некорректный Bluetooth MAC-адрес в конфигурации.",
+      "invalid_adapter": "Укажите корректный ненулевой MAC локального Bluetooth-адаптера.",
+      "invalid_transport": "Выберите поддерживаемый способ подключения."
     }
   },
   "options": {
@@ -34,12 +36,14 @@
           "transport": "Подключение к принтеру",
           "bridge_url": "Адрес моста",
           "bridge_token": "Токен доступа к мосту",
-          "font_path": "Путь к локальному Unicode-шрифту TTF/OTF"
+          "font_path": "Путь к локальному Unicode-шрифту TTF/OTF",
+          "adapter_mac": "MAC локального Bluetooth-адаптера"
         },
         "data_description": {
-          "transport": "Обычный режим использует Bluetooth этого хоста Home Assistant или ESPHome-прокси. Мост отправляет готовую этикетку на мост TinyPrint на ближайшем Linux-хосте.",
+          "transport": "Обычный Bluetooth поддерживает адаптеры и прокси HA. Прямой LE работает на этом Linux-хосте без home и ключа. Мост — отдельный необязательный сервер.",
           "bridge_url": "Адрес моста, например http://100.64.0.5:8765. Укажи адрес Tailscale или локальной сети, на котором слушает мост.",
-          "bridge_token": "Оставь пустым, чтобы сохранить текущий токен. На хосте моста прочитай файл, указанный в TINYPRINT_BRIDGE_TOKEN_FILE в bridge.env (см. docs/bridge.md)"
+          "bridge_token": "Оставь пустым, чтобы сохранить текущий токен. На хосте моста прочитай файл, указанный в TINYPRINT_BRIDGE_TOKEN_FILE в bridge.env (см. docs/bridge.md)",
+          "adapter_mac": "Только для прямого LE: адрес адаптера из bluetoothctl list, не адрес принтера. Мост и ключ не нужны."
         }
       }
     },
@@ -48,7 +52,9 @@
       "invalid_token": "Токен должен содержать не меньше 32 печатных символов без пробелов",
       "token_required": "Укажи токен доступа к мосту",
       "cannot_connect": "Мост не отвечает. Проверь, что он запущен и доступен из Home Assistant",
-      "invalid_auth": "Мост отклонил токен доступа"
+      "invalid_auth": "Мост отклонил токен доступа",
+      "invalid_adapter": "Укажите корректный ненулевой MAC локального Bluetooth-адаптера.",
+      "invalid_transport": "Выберите поддерживаемый способ подключения."
     }
   },
   "entity": {
@@ -123,7 +129,8 @@
     "transport": {
       "options": {
         "native": "Обычный Bluetooth",
-        "bridge": "Мост TinyPrint"
+        "bridge": "Мост TinyPrint",
+        "local_le": "Прямой LE на хосте Home Assistant"
       }
     }
   }

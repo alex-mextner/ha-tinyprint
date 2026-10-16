@@ -44,7 +44,7 @@ async def service(request):
             ],
             "templates": renderer.TEMPLATES,
             "presets": renderer.PRESETS,
-            "version": "0.2.1",
+            "version": "0.2.2",
         }
     elif name == "preview":
         image = await asyncio.to_thread(renderer.render_document, data["document"])
@@ -240,6 +240,16 @@ async def main():
         checks.append(
             "bridge mode: reachable bridge badge, local RSSI labelled local, print usable"
         )
+        await page.evaluate("""() => {
+            const panel = document.querySelector('tinyprint-panel');
+            panel.printers[0].transport = {mode: 'local_le', local_adapter_configured: true};
+            panel.printers[0].visible = true;
+            panel.deviceStatus();
+        }""")
+        assert await status.inner_text() == "Локальный LE · принтер виден"
+        assert await page.locator("#diagnose").inner_text() == "Проверить локальный LE"
+        await page.screenshot(path=str(out / "local-le-panel.png"), full_page=True)
+        checks.append("direct local LE names this host, without a bridge or key")
         assert not errors, errors
         checks.append("zero browser JavaScript exceptions")
         await browser.close()

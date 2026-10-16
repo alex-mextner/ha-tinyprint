@@ -116,7 +116,7 @@ fi
 script_dir=$(cd "$(dirname "$0")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 shared_src="${repo_root}/custom_components/tinyprint"
-for module in protocol transport att bridge_wire; do
+for module in protocol transport att bridge_wire le_link; do
     [ -f "${shared_src}/${module}.py" ] || die "missing ${shared_src}/${module}.py (run from a full checkout)"
 done
 
@@ -133,7 +133,7 @@ rm -rf "${app}/bridge" "${app}/custom_components"
 mkdir -p "${app}/bridge" "${app}/custom_components/tinyprint"
 cp -R "${script_dir}/tinyprint_bridge" "${app}/bridge/tinyprint_bridge"
 find "${app}/bridge" -name __pycache__ -type d -prune -exec rm -rf {} +
-for module in protocol transport att bridge_wire; do
+for module in protocol transport att bridge_wire le_link; do
     cp "${shared_src}/${module}.py" "${app}/custom_components/tinyprint/${module}.py"
 done
 

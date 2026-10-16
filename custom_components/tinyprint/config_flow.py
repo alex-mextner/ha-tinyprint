@@ -28,6 +28,7 @@ from .const import (
     TRANSPORT_BRIDGE,
     TRANSPORT_NATIVE,
 )
+from .local_le import normalize_adapter_mac
 from .protocol import ADV_UUID
 
 
@@ -74,10 +75,29 @@ class TinyPrintConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_import(self, user_input: dict[str, Any]):
         try:
-            normalize_address(user_input["address"])
+            address = normalize_address(user_input["address"])
         except KeyError, ValueError:
             return self.async_abort(reason="invalid_address")
-        return await self.async_step_user(user_input)
+        mode = user_input.get("transport", "native")
+        if mode not in ("native", "local_le"):
+            return self.async_abort(reason="invalid_transport")
+        # HA merges import updates: include defaults so removing YAML settings
+        # actually restores native transport instead of retaining old local LE.
+        data = {
+            "address": address,
+            "font_path": user_input.get("font_path", ""),
+            "transport": mode,
+            "adapter_mac": "",
+        }
+        if mode == "local_le":
+            try:
+                data["adapter_mac"] = normalize_adapter_mac(user_input.get("adapter_mac"))
+            except ValueError:
+                return self.async_abort(reason="invalid_adapter")
+        await self.async_set_unique_id(address)
+        # Public update preserves IDs; the existing entry listener reloads on real changes.
+        self._abort_if_unique_id_configured(updates=data, reload_on_update=False)
+        return self.async_create_entry(title=user_input.get("name") or NAME, data=data)
 
     async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak):
         name = discovery_info.name or ""
@@ -118,7 +138,7 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Required(CONF_TRANSPORT, default=current[CONF_TRANSPORT]): SelectSelector(
                     SelectSelectorConfig(
-                        options=[TRANSPORT_NATIVE, TRANSPORT_BRIDGE],
+                        options=[TRANSPORT_NATIVE, TRANSPORT_BRIDGE, "local_le"],
                         translation_key=CONF_TRANSPORT,
                         mode=SelectSelectorMode.DROPDOWN,
                     )
@@ -130,6 +150,9 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                     TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="off")
                 ),
                 vol.Optional("font_path", default=current["font_path"]): str,
+                vol.Optional(
+                    "adapter_mac", description={"suggested_value": current.get("adapter_mac", "")}
+                ): str,
             }
         )
 
@@ -174,6 +197,13 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                 CONF_TRANSPORT: user_input.get(CONF_TRANSPORT, TRANSPORT_NATIVE),
                 "font_path": user_input.get("font_path", ""),
             }
+            if data[CONF_TRANSPORT] not in (TRANSPORT_NATIVE, TRANSPORT_BRIDGE, "local_le"):
+                errors[CONF_TRANSPORT] = "invalid_transport"
+            elif data[CONF_TRANSPORT] == "local_le":
+                try:
+                    data["adapter_mac"] = normalize_adapter_mac(user_input.get("adapter_mac"))
+                except ValueError:
+                    errors["adapter_mac"] = "invalid_adapter"
             if data[CONF_TRANSPORT] == TRANSPORT_BRIDGE:
                 if checked := await self._validated_bridge(user_input, errors):
                     data[CONF_BRIDGE_URL], data[CONF_BRIDGE_TOKEN] = checked
@@ -185,7 +215,12 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=self._schema(
                 {
-                    CONF_TRANSPORT: source.get(CONF_TRANSPORT, TRANSPORT_NATIVE),
+                    CONF_TRANSPORT: source.get(
+                        CONF_TRANSPORT, self._entry.data.get(CONF_TRANSPORT, TRANSPORT_NATIVE)
+                    ),
+                    "adapter_mac": source.get(
+                        "adapter_mac", self._entry.data.get("adapter_mac", "")
+                    ),
                     CONF_BRIDGE_URL: source.get(CONF_BRIDGE_URL, ""),
                     "font_path": source.get(
                         "font_path", options.get("font_path", self._entry.data.get("font_path", ""))
