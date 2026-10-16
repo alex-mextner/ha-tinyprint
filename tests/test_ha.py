@@ -248,6 +248,70 @@ class HomeAssistantAdapterTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(released.wait(), 2)
         client.disconnect.assert_awaited_once()
 
+    async def _cancel_during_disconnect(self, cancels, finish_disconnect):
+        lock = asyncio.Lock()
+        started = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def disconnect():
+            started.set()
+            await finished.wait()
+
+        client = SimpleNamespace(is_connected=True, disconnect=AsyncMock(side_effect=disconnect))
+
+        async def use():
+            async with lock:
+                async with connected_client(self.hass, AsyncMock(return_value=client)()):
+                    pass
+
+        task = asyncio.create_task(use())
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            for _ in range(cancels):
+                task.cancel()
+                await asyncio.sleep(0.05)
+            if finish_disconnect:
+                self.assertFalse(task.done())
+                self.assertTrue(lock.locked())
+                finished.set()
+            # asyncio.wait never re-cancels the task, so a regression fails instead of hanging.
+            await asyncio.wait({task}, timeout=2)
+            self.assertTrue(task.done())
+        finally:
+            finished.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        self.assertFalse(lock.locked())
+        client.disconnect.assert_awaited_once()
+
+    async def test_cancel_during_disconnect_keeps_lock_until_disconnected(self):
+        await self._cancel_during_disconnect(cancels=1, finish_disconnect=True)
+
+    async def test_repeated_cancel_during_disconnect_keeps_lock_until_disconnected(self):
+        await self._cancel_during_disconnect(cancels=2, finish_disconnect=True)
+
+    async def test_stuck_disconnect_is_still_bounded_after_cancels(self):
+        with patch("custom_components.tinyprint.connection.DISCONNECT_TIMEOUT", 0.3):
+            await self._cancel_during_disconnect(cancels=2, finish_disconnect=False)
+
+    async def test_stuck_disconnect_times_out_without_cancel(self):
+        stuck = asyncio.Event()
+        client = SimpleNamespace(is_connected=True, disconnect=AsyncMock(side_effect=stuck.wait))
+
+        async def use():
+            async with connected_client(self.hass, AsyncMock(return_value=client)()):
+                pass
+
+        with patch("custom_components.tinyprint.connection.DISCONNECT_TIMEOUT", 0.3):
+            task = asyncio.create_task(use())
+            try:
+                await asyncio.wait({task}, timeout=2)
+                self.assertTrue(task.done())
+            finally:
+                stuck.set()
+            await asyncio.wait_for(task, 2)
+        client.disconnect.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

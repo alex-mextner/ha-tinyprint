@@ -1,6 +1,7 @@
 """Authenticated Studio actions and an idempotent, packaged Home Assistant panel."""
 
 import asyncio
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -67,8 +68,11 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             try:
                 return await asyncio.shield(job)
             except asyncio.CancelledError:
-                # Hold the slot until the bounded worker actually finishes.
-                await asyncio.wait({job})
+                # Hold the slot until the bounded worker actually finishes,
+                # even if another cancel arrives while waiting.
+                while not job.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.wait({job})
                 if not job.cancelled():
                     job.exception()
                 raise
