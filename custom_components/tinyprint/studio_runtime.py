@@ -214,7 +214,7 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
             detail = (
                 "Partial delivery is possible; no automatic replay."
                 if partial
-                else "No raster writes were attempted."
+                else "Проверьте подключение принтера."
             )
             raise HomeAssistantError(
                 f"Printer failed at {failure_phase} ({type(error).__name__}). {detail}"
