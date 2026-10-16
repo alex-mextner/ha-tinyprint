@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -255,6 +256,64 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(printer.status, "error")
         self.assertTrue(printer.last_result.get("failure_phase"))
         client.disconnect.assert_awaited()
+
+    async def test_cancel_during_render_holds_printer_until_worker_finishes(self):
+        await self._assert_cancel_waits_for_render(cancels=1)
+
+    async def test_repeated_cancel_during_render_still_holds_printer(self):
+        await self._assert_cancel_waits_for_render(cancels=2)
+
+    async def test_repeated_caller_cancel_during_render_still_holds_printer(self):
+        await self._assert_cancel_waits_for_render(cancels=0, caller_cancels=2)
+
+    async def _assert_cancel_waits_for_render(self, cancels, caller_cancels=0):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None)
+        started = threading.Event()
+        release = threading.Event()
+
+        def render(*args):
+            started.set()
+            release.wait(5)
+            return bytes(48), 1
+
+        try:
+            with (
+                patch.object(printer, "_render", new=render),
+                patch(
+                    "custom_components.tinyprint.studio_runtime.establish_connection",
+                    new=AsyncMock(),
+                ) as connect,
+            ):
+                caller = asyncio.create_task(printer.async_print("text", "Hello"))
+                await asyncio.wait_for(asyncio.to_thread(started.wait, 2), 3)
+                cancel_tasks = []
+                for _ in range(cancels):
+                    cancel_tasks.append(asyncio.create_task(printer.async_cancel()))
+                    await asyncio.sleep(0.2)
+                for _ in range(caller_cancels):
+                    caller.cancel()
+                    await asyncio.sleep(0.2)
+                self.assertTrue(printer.lock.locked())
+                with self.assertRaises(ServiceValidationError):
+                    await printer.async_print("text", "Second")
+                self.assertFalse(caller.done())
+                self.assertFalse(any(task.done() for task in cancel_tasks))
+                release.set()
+                await asyncio.wait_for(asyncio.gather(*cancel_tasks), 3)
+                if caller_cancels:
+                    with self.assertRaises(asyncio.CancelledError):
+                        await asyncio.wait_for(caller, 3)
+                else:
+                    with self.assertRaises(HomeAssistantError) as raised:
+                        await asyncio.wait_for(caller, 3)
+                    self.assertIn("cannot be recalled", str(raised.exception))
+        finally:
+            release.set()
+        self.assertFalse(printer.lock.locked())
+        self.assertIsNone(printer.task)
+        connect.assert_not_called()
 
     async def test_diagnose_cancel_says_no_print_was_sent(self):
         from custom_components.tinyprint.studio_runtime import StudioPrinter

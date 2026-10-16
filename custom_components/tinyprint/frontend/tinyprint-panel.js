@@ -223,6 +223,7 @@ class TinyPrintPanel extends HTMLElement {
   document() {
     const options = {};
     this.shadowRoot.querySelectorAll('[data-option]').forEach(control => {
+      if (control.closest('[hidden]')) return;
       if (control.dataset.option === 'preset' && !control.value) return;
       options[control.dataset.option] = control.type === 'checkbox' ? control.checked : (control.hasAttribute('data-number') ? Number(control.value) : control.value);
     });

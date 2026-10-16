@@ -187,4 +187,5 @@ python tests/browser_studio.py                          # requires Playwright/Ch
 The browser harness loads the real packaged web component and real renderer but
 simulates HA service routing and Bluetooth. Screenshots are labelled accordingly.
 It checks mobile layout, upload, presets, stale previews, explicit single printing,
-no print during diagnosis, injection safety and browser exceptions.
+no print during diagnosis, hidden image options left out of template previews,
+injection safety and browser exceptions.

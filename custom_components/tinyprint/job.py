@@ -1,6 +1,7 @@
 """Run a cancellable print job without cancelling its HA service caller."""
 
 import asyncio
+import contextlib
 from collections.abc import Coroutine
 from typing import Any
 
@@ -20,7 +21,10 @@ async def run_owned_job(
     except asyncio.CancelledError:
         if asyncio.current_task().cancelling():
             task.cancel()
-            await asyncio.wait({task})
+            # Repeated caller cancels must not release the printer before the job ends.
+            while not task.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.wait({task})
             raise
         raise HomeAssistantError(cancelled_message) from None
     finally:

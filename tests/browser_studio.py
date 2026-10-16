@@ -178,6 +178,22 @@ async def main():
             "calls.filter(c=>c.service==='print_document').length===1 && calls.filter(c=>c.service==='diagnose').length===1"
         )
         checks.append("diagnosis never invokes a print service")
+        await page.locator("#width").fill("")
+        await page.locator('[data-mode="template"]').click()
+        previews = await page.evaluate("calls.filter(c=>c.service==='preview').length")
+        await page.locator("#preview").click()
+        await page.wait_for_function(
+            f"calls.filter(c=>c.service==='preview').length>{previews} && !document.querySelector('tinyprint-panel').busy"
+        )
+        assert await page.evaluate("!!document.querySelector('tinyprint-panel').signature")
+        sent = await page.evaluate(
+            "Object.keys(calls.filter(c=>c.service==='preview').at(-1).service_data.document.options)"
+        )
+        image_only = {"preset", "method", "rotate", "fit", "width", "invert"}
+        image_only |= {"brightness", "contrast", "sharpness", "threshold"}
+        assert not image_only & set(sent), sent
+        assert {"font_size", "qr_size"} <= set(sent), sent
+        checks.append("hidden image controls are not sent with template previews")
         await page.locator('[data-mode="template"]').click()
         await page.locator("#field-title").fill('<img src=x onerror="window.pwned=true">')
         await page.locator("#automation").evaluate("(e)=>e.open=true")

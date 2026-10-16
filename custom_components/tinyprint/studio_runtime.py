@@ -1,6 +1,7 @@
 """Studio jobs and payload-free tracing around the established BLE transport."""
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 from time import monotonic
@@ -170,9 +171,18 @@ class StudioPrinter(TinyPrintPrinter):
         self.begin()
         self.phase("rendering", "rendering")
         try:
-            data, height = await self.hass.async_add_executor_job(
-                self._render, kind, payload, font_size
-            )
+            render = self.hass.async_add_executor_job(self._render, kind, payload, font_size)
+            try:
+                data, height = await asyncio.shield(render)
+            except asyncio.CancelledError:
+                # Keep the printer lock until the executor render actually finishes,
+                # even if another cancel arrives while waiting.
+                while not render.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.wait({render})
+                if not render.cancelled():
+                    render.exception()
+                raise
             async with self.connection() as client:
                 self.phase("gatt_validation", "printing")
                 stats = await send_bitmap(TrackedClient(client, self), data, height)
