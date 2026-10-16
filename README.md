@@ -77,6 +77,29 @@ are at most 20 bytes with conservative pacing and bounded buffer-flow waits.
 The total transfer budget scales with image height (60 to 600 seconds maximum),
 so a proxy round trip is not confused with a stalled printer.
 
+## Optional LE print bridge (0.2.1)
+
+BlueZ connects dual-mode printers such as the X6h over BR/EDR, which fails, and the HA
+host's adapter may simply be too far away. A small bridge service on a nearby Linux host
+can talk to the printer over an explicit LE link instead (see `docs/bridge.md`). Home
+Assistant still renders everything and sends only a validated 384-wide 1-bit bitmap.
+
+Open **Settings > Devices & services > TinyPrint > Configure** as an administrator, choose
+**TinyPrint bridge**, then enter the bridge URL and access token. Saving checks the bridge
+before storing anything (`cannot connect` / `access token rejected` are shown in the form).
+A blank token keeps the saved one for the same URL; picking native Bluetooth again removes
+the bridge address and token. Without these options nothing changes: the native Bluetooth
+and ESPHome path stays the default.
+
+In bridge mode the old actions, Studio actions, test button and sidebar all use the same
+printer lock and the bridge. Printing and diagnosing never use HA's own Bluetooth (its scan
+data in `printer_info` is only labelled as local), so a printer that HA cannot see still prints. A broken bridge configuration, an unreachable bridge or a lost
+answer fails closed: there is no fallback to local Bluetooth and no automatic replay, and a
+request whose answer was lost is reported as `delivery_uncertain`. The sidebar and
+`printer_info` show the transport and the bridge's HTTP state (reachable, busy, token
+rejected, unreachable); a reachable bridge does not prove the printer link, run **Diagnose**
+for that. Bridge URL and token never appear in diagnostics or action responses.
+
 ## Privacy and limitations
 
 Print content, MAC addresses and font/file paths are excluded from integration

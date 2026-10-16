@@ -88,3 +88,31 @@ class NotificationParser:
             if packet[2:6] == b"\xae\x01\x01\x00" and packet[6] in (0, 16):
                 result.append(packet[6] == 0)
         return result
+
+
+class FrameCounter:
+    """Count completed host frames from a stream of <=20-byte writes, with bounded memory.
+
+    Garbage (wrong prefix or an impossible length) clears the buffer rather than guessing,
+    so a corrupt stream under-counts instead of wedging.
+    """
+
+    def __init__(self) -> None:
+        self._pending = bytearray()
+
+    def feed(self, data: bytes) -> int:
+        self._pending.extend(data)
+        completed = 0
+        while len(self._pending) >= 6:
+            if self._pending[:2] != b"\x51\x78":
+                self._pending.clear()
+                break
+            total = int.from_bytes(self._pending[4:6], "little") + 8
+            if total > 520:
+                self._pending.clear()
+                break
+            if len(self._pending) < total:
+                break
+            completed += 1
+            del self._pending[:total]
+        return completed

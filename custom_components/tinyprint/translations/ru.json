@@ -29,10 +29,26 @@
     "step": {
       "init": {
         "title": "Настройки печати",
+        "description": "Настройки моста доступны только администраторам. Возврат к обычному Bluetooth удаляет сохранённые адрес и токен моста.",
         "data": {
+          "transport": "Подключение к принтеру",
+          "bridge_url": "Адрес моста",
+          "bridge_token": "Токен доступа к мосту",
           "font_path": "Путь к локальному Unicode-шрифту TTF/OTF"
+        },
+        "data_description": {
+          "transport": "Обычный режим использует Bluetooth этого хоста Home Assistant или ESPHome-прокси. Мост отправляет готовую этикетку на мост TinyPrint на ближайшем Linux-хосте.",
+          "bridge_url": "Адрес моста, например http://100.64.0.5:8765. Укажи адрес Tailscale или локальной сети, на котором слушает мост.",
+          "bridge_token": "Оставь пустым, чтобы сохранить текущий токен. На хосте моста прочитай файл, указанный в TINYPRINT_BRIDGE_TOKEN_FILE в bridge.env (см. docs/bridge.md)"
         }
       }
+    },
+    "error": {
+      "invalid_url": "Укажи адрес http:// или https:// с хостом и необязательным портом, без пути, логина и параметров",
+      "invalid_token": "Токен должен содержать не меньше 32 печатных символов без пробелов",
+      "token_required": "Укажи токен доступа к мосту",
+      "cannot_connect": "Мост не отвечает. Проверь, что он запущен и доступен из Home Assistant",
+      "invalid_auth": "Мост отклонил токен доступа"
     }
   },
   "entity": {
@@ -100,6 +116,14 @@
           "name": "Printer",
           "description": "Required when multiple TinyPrint printers are configured."
         }
+      }
+    }
+  },
+  "selector": {
+    "transport": {
+      "options": {
+        "native": "Обычный Bluetooth",
+        "bridge": "Мост TinyPrint"
       }
     }
   }

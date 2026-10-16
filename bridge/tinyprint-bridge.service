@@ -1,0 +1,30 @@
+[Unit]
+Description=TinyPrint LE print bridge
+Documentation=https://github.com/alex-mextner/ha-tinyprint/blob/initial-integration/docs/bridge.md
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/tinyprint-bridge/venv/bin/python -m tinyprint_bridge
+WorkingDirectory=%h/.local/share/tinyprint-bridge/app/bridge
+Environment=PYTHONPATH=%h/.local/share/tinyprint-bridge/app/bridge
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=%h/.config/tinyprint-bridge/bridge.env
+Restart=on-failure
+RestartSec=5
+# A bad config exits 2; do not hammer it in a restart loop.
+RestartPreventExitStatus=2
+TimeoutStopSec=30
+
+# The bridge only needs the network, an AF_BLUETOOTH L2CAP socket and read access to its files.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_BLUETOOTH
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target
