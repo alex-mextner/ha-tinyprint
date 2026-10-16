@@ -328,6 +328,15 @@ async def test_cancel_unknown_job_is_404(env):
     assert (await response.json())["error"]["code"] == "not_found"
 
 
+async def test_start_delayed_past_its_blind_cancel_is_refused_over_http(env):
+    cancelled = await env.client.post("/v1/jobs/job-late0001/cancel", headers=AUTH)
+    assert cancelled.status == 404
+    late = await env.client.post("/v1/jobs", json=body("job-late0001"), headers=AUTH)
+    assert late.status == 409
+    assert (await late.json())["error"]["code"] == "duplicate_job"
+    assert env.link.connects == 0
+
+
 async def test_failed_job_reports_error_and_never_retries(env):
     env.gatt.fail_send_after_commands = 2
     await env.client.post("/v1/jobs", json=body(), headers=AUTH)

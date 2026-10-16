@@ -1,4 +1,4 @@
-# TinyPrint Studio (0.2.0)
+# TinyPrint Studio (0.2.1)
 
 The native **TinyPrint** sidebar contains a label editor, exact one-bit preview,
 image preparation and explicit print/cancel/diagnose controls. It is packaged with
@@ -175,6 +175,24 @@ To verify hardware after the host is reachable: check `printer_info`, run one
 `diagnose`, capture matching BlueZ/btmon output if it fails, then explicitly print
 a short note and QR. Photograph the output and scan the QR. No mock test or
 `transport_only` result substitutes for this step.
+
+## Bridge transport
+
+With the optional bridge configured in the integration options (see `README.md` and
+`docs/bridge.md`), print, `print_document`, `print_template`, `diagnose` and `cancel` use the
+bridge instead of local Bluetooth, behind the same printer lock. Extra phases appear in
+`last_result.phase`: `bridge_submit`, `bridge_accepted`, `bridge_connecting`,
+`bridge_discovering`, `bridge_transmitting`, then `sent`. `last_result` also carries
+`bridge_job_id`, and `bridge_cancel` (`acknowledged`, `pending`, `not_found`, `failed`; the `cancel` action also
+answers `none_active` when the bridge is idle and `not_applicable` without a bridge) after a
+cancel.
+`printer_info` gains `transport` (`mode`, `bridge_state`, `bridge_scheme`, `bridge_checked_at`)
+and `local_scan_only`: in bridge mode `visible` and `rssi_raw` describe Home Assistant's own
+radio, not the printer. The sidebar shows the bridge state instead of "visible over
+Bluetooth". `cancel` with no local job asks the bridge to cancel whatever job it reports as
+active and returns `bridge_cancel`. A timeout after a print request was sent is reported as
+`delivery_uncertain`; the request is never repeated automatically, and a job that may still be
+running on the bridge is cancelled rather than left without an owner.
 
 ## Verification commands
 
