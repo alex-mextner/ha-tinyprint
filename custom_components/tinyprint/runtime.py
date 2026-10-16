@@ -33,6 +33,7 @@ class TinyPrintPrinter:
         *,
         bridge: BridgeSettings | None = None,
         bridge_error: str | None = None,
+        local_adapter: str | None = None,
     ) -> None:
         self.hass = hass
         self.entry_id = entry_id
@@ -48,7 +49,14 @@ class TinyPrintPrinter:
         # A selected-but-broken bridge stays "bridge" so printing fails closed, never to BLE.
         self.bridge = bridge
         self.bridge_error = bridge_error
-        self.transport = TRANSPORT_BRIDGE if bridge or bridge_error else TRANSPORT_NATIVE
+        self.adapter_mac = local_adapter
+        self.transport = (
+            "local_le"
+            if local_adapter is not None
+            else TRANSPORT_BRIDGE
+            if bridge or bridge_error
+            else TRANSPORT_NATIVE
+        )
         self.bridge_state = (
             "native"
             if self.transport == TRANSPORT_NATIVE
@@ -62,6 +70,7 @@ class TinyPrintPrinter:
         """Secret-free transport summary: no URL, host or token."""
         return {
             "mode": self.transport,
+            "local_adapter_configured": self.transport == "local_le" and bool(self.adapter_mac),
             "bridge_configured": self.bridge is not None,
             "bridge_state": self.bridge_state,
             "bridge_scheme": self.bridge.scheme if self.bridge else None,

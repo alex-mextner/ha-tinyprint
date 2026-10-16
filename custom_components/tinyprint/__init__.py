@@ -23,6 +23,8 @@ PRINTER_SCHEMA = vol.Schema(
         vol.Required("address"): cv.string,
         vol.Optional("name", default="TinyPrint X6h"): cv.string,
         vol.Optional("font_path", default=""): cv.string,
+        vol.Optional("transport"): vol.In(("native", "local_le")),
+        vol.Optional("adapter_mac"): cv.string,
     }
 )
 CONFIG_SCHEMA = vol.Schema(
@@ -97,6 +99,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "TinyPrint bridge transport is selected but its options are invalid; "
             "printing stays disabled (no Bluetooth fallback) until the options are fixed"
         )
+    effective = dict(entry.data) | dict(entry.options)
+    local_adapter = (
+        (effective.get("adapter_mac") or "") if effective.get("transport") == "local_le" else None
+    )
     runtime = TinyPrintPrinter(
         hass,
         entry.entry_id,
@@ -105,6 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.options.get("font_path", entry.data.get("font_path")) or None,
         bridge=bridge,
         bridge_error=bridge_error,
+        local_adapter=local_adapter,
     )
     hass.data[DOMAIN][entry.entry_id] = runtime
     try:

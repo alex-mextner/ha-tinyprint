@@ -18,7 +18,7 @@ from .diagnostics import transport_info
 from .studio_render import PRESETS, TEMPLATES, preview_result, render_document
 
 DATA_KEY = "tinyprint_studio"
-PANEL_VERSION = "0.2.1"
+PANEL_VERSION = "0.2.2"
 
 
 def _printer(hass: HomeAssistant, device_id: str) -> Any:

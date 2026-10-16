@@ -12,6 +12,13 @@ the target unit is **not yet confirmed**: the device stopped advertising before
 the hardware check. A successful service result means **sent**, never verified
 paper output. Treat this initial version as an experimental integration.
 
+## Direct local LE (0.2.2)
+
+For an X6h on a Linux HA host, the opt-in `local_le` transport bypasses Classic
+Bluetooth bearer selection without a second host, HTTP bridge or token. All
+existing actions and Studio use it. See [configuration and hardware limitations](docs/local-le.md).
+A successful software test is not physical print acceptance.
+
 ## Install
 
 Add `https://github.com/alex-mextner/ha-tinyprint` in HACS > Custom repositories,

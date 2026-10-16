@@ -167,10 +167,11 @@ class TinyPrintPanel extends HTMLElement {
   deviceStatus() {
     const printer = this.printers?.find(p => p.device_id === this.$('#device').value);
     const bridge = printer?.transport?.mode === 'bridge';
+    const localLE = printer?.transport?.mode === 'local_le';
     // Bridge reachability says nothing about the printer's own radio link; only diagnose proves that.
     const bridgeStates = {reachable:'Мост доступен', busy:'Мост занят заданием', auth_failed:'Ошибка доступа к мосту', unreachable:'Мост недоступен', misconfigured:'Мост настроен неверно', unchecked:'Проверка моста'};
-    this.$('#device-status').textContent = !printer ? 'Офлайн-предпросмотр' : bridge ? (bridgeStates[printer.transport.bridge_state] || 'Состояние моста неизвестно') : (printer.visible ? 'Виден по Bluetooth' : 'Не виден по Bluetooth');
-    this.$('#diagnose').textContent = bridge ? 'Проверить через мост' : 'Проверить Bluetooth';
+    this.$('#device-status').textContent = !printer ? 'Офлайн-предпросмотр' : bridge ? (bridgeStates[printer.transport.bridge_state] || 'Состояние моста неизвестно') : localLE ? (printer.visible ? 'Локальный LE · принтер виден' : 'Локальный LE · нет объявления') : (printer.visible ? 'Виден по Bluetooth' : 'Не виден по Bluetooth');
+    this.$('#diagnose').textContent = bridge ? 'Проверить через мост' : localLE ? 'Проверить локальный LE' : 'Проверить Bluetooth';
     // In bridge mode Bluetooth fields come from Home Assistant's own radio, not the printer's link.
     if (printer) this.$('#diagnostic-data').textContent = JSON.stringify({status: printer.status, transport: printer.transport, last_error: printer.last_error, [bridge ? 'local_rssi_raw' : 'rssi_raw']: printer.rssi_raw, ...printer.last_result}, null, 2);
   }

@@ -19,7 +19,8 @@ jobs:
           python -m pytest tests/test_core.py tests/test_transport.py tests/test_studio_render.py
           tests/test_frame_counter.py tests/test_bridge_wire.py tests/test_att.py
           tests/test_bridge_config.py tests/test_bridge_link.py tests/test_bridge_jobs.py
-          tests/test_bridge_server.py tests/test_bridge_installer.py tests/test_bridge_client.py -q
+          tests/test_bridge_server.py tests/test_bridge_installer.py tests/test_bridge_client.py
+          tests/test_local_le.py -q
       - run: ruff check . && ruff format --check .
       - name: Prepare formatter suggestions without bypassing validation
         if: failure()
@@ -58,6 +59,7 @@ jobs:
           name: studio-browser-proof-mock-ha
           path: |
             verification/studio-*.png
+            verification/local-le-panel.png
             verification/browser-results.json
   hassfest:
     runs-on: ubuntu-latest

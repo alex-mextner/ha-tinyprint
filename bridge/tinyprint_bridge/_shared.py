@@ -1,6 +1,6 @@
 """Load the pure TinyPrint modules shared with the Home Assistant integration.
 
-The bridge must reuse protocol.py, transport.py, att.py and bridge_wire.py from
+The bridge must reuse protocol.py, transport.py, att.py, bridge_wire.py and le_link.py from
 custom_components/tinyprint without copying them (copies drift) and without executing that
 package's `__init__.py`, which imports Home Assistant. A synthetic package whose `__path__` is
 the integration directory gives the modules their relative imports and nothing else.
@@ -44,3 +44,5 @@ protocol = _load("protocol")
 transport = _load("transport")
 att = _load("att")
 bridge_wire = _load("bridge_wire")
+
+le_link = _load("le_link")
