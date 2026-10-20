@@ -14,7 +14,7 @@ att = load("att")
 protocol = load("protocol")
 transport = load("transport")
 
-KW = dict(chunk_delay=0, row_delay=0, settle_delay=0, pause_timeout=0.5, total_timeout=5)
+KW = dict(chunk_delay=0, pause_timeout=0.5, total_timeout=5)
 
 
 async def connected(server, **kwargs):
@@ -584,7 +584,8 @@ async def test_send_bitmap_over_att_end_to_end():
     server, client, gatt = await gatt_pair()
     bitmap = bytes(range(48)) * 3
     stats = await transport.send_bitmap(gatt, bitmap, 3, **KW)
-    expected = b"".join(protocol.print_frames(bitmap, 3))
+    # The wire carries a state precheck, then the job whose last frame is the state request.
+    expected = protocol.get_state_frame() + b"".join(protocol.print_frames(bitmap, 3))
     assert b"".join(value for _handle, value in server.commands) == expected
     assert all(len(value) <= 20 for _handle, value in server.commands)
     assert {handle for handle, _ in server.commands} == {server.write_handle}
@@ -592,7 +593,8 @@ async def test_send_bitmap_over_att_end_to_end():
     assert stats["bytes_written"] == len(expected)
     assert gatt.counters["bytes_written"] == len(expected)
     assert gatt.counters["writes"] == len(server.commands)
-    assert gatt.counters["frames_written"] == stats["frames_written"] == 3 + 3 + 2
+    assert stats["frames_written"] == len(list(protocol.print_frames(bitmap, 3)))
+    assert gatt.counters["frames_written"] == stats["frames_written"] + 1  # + precheck
     assert [e for e in server.events if e[0] == "cccd"] == [
         ("cccd", b"\x01\x00"),
         ("cccd", b"\x00\x00"),
@@ -624,7 +626,8 @@ async def test_notification_pause_and_resume_gate_the_writes():
     between = kinds[kinds.index("pause") : kinds.index("resume")]
     assert "cmd" not in between
     assert stats["flow_pauses"] == 1 and gatt.counters["flow_pauses"] == 1
-    assert gatt.counters["notifications"] == 2 and stats["notifications"] == 2
+    # precheck reply, pause, resume and the reply to the closing state request
+    assert gatt.counters["notifications"] == 4 and stats["notifications"] == 4
     assert stats["bytes_written"] == gatt.counters["bytes_written"]
 
 

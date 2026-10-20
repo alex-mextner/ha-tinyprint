@@ -40,31 +40,90 @@ def frame(command: int, payload: bytes) -> bytes:
     )
 
 
+CMD_FEED = 0xA1
+CMD_RAW_ROW = 0xA2
+CMD_GET_STATE = 0xA3
+CMD_QUALITY = 0xA4
+CMD_ENERGY = 0xAF
+CMD_SPEED = 0xBD
+CMD_MODE = 0xBE
+# Values that print on the X6h (firmware 3.0.5D) in the hardware-verified catprinter
+# integration; 24000 energy and the missing quality/state commands never printed here.
+QUALITY = 0x33
+TEXT_ENERGY = 8000
+SPEED = 10
+FEED_SPEED = 25
+SPEED_REFRESH_ROWS = 200
+FEED_STEP = 48
+
+
+def get_state_frame() -> bytes:
+    """Ask for the A3 state; the printer answers once the earlier raster has been consumed."""
+    return frame(CMD_GET_STATE, b"\x00")
+
+
 def print_frames(bitmap: bytes, height: int, *, feed: int = 64) -> Iterator[bytes]:
-    """Convert MSB-first, black=1 bitmap to bounded raw-raster print frames."""
+    """Convert MSB-first, black=1 bitmap to bounded raw-raster print frames.
+
+    The job ends with an A3 state request: its reply is the printer's job-consumed signal.
+    """
     if not 1 <= height <= MAX_ROWS or len(bitmap) != height * ROW_BYTES:
         raise ValueError("Bitmap must contain 1..2048 rows of 384 dots")
     if not 0 <= feed <= 512:
         raise ValueError("Feed must be between 0 and 512 rows")
-    yield frame(0xBD, b"\x10")  # conservative feed divisor 16
-    yield frame(0xAF, struct.pack("<H", 24000))
-    yield frame(0xBE, b"\x01")
-    yield frame(0xA2, bytes(ROW_BYTES))  # blank lead prevents first-row artifacts
-    for offset in range(0, len(bitmap), ROW_BYTES):
-        yield frame(0xA2, bitmap[offset : offset + ROW_BYTES].translate(_REVERSE))
-    if feed:
-        yield frame(0xA1, struct.pack("<H", feed))
+    speed = frame(CMD_SPEED, bytes((SPEED,)))
+    yield frame(CMD_QUALITY, bytes((QUALITY,)))
+    yield frame(CMD_ENERGY, struct.pack("<H", TEXT_ENERGY))
+    yield frame(CMD_MODE, b"\x01")
+    yield speed
+    yield frame(CMD_RAW_ROW, bytes(ROW_BYTES))  # blank lead prevents first-row artifacts
+    for index, offset in enumerate(range(0, len(bitmap), ROW_BYTES), start=1):
+        yield frame(CMD_RAW_ROW, bitmap[offset : offset + ROW_BYTES].translate(_REVERSE))
+        if index % SPEED_REFRESH_ROWS == 0:
+            yield speed
+    yield frame(CMD_SPEED, bytes((FEED_SPEED,)))
+    while feed > 0:
+        step = min(feed, FEED_STEP)
+        yield frame(CMD_FEED, struct.pack("<H", step))
+        feed -= step
+    yield get_state_frame()
+
+
+STATUS_FLAGS = (
+    (0x01, "out_of_paper"),
+    (0x02, "cover_open"),
+    (0x04, "overheating"),
+    (0x08, "low_battery"),
+    (0x10, "charging"),
+    (0x80, "printing"),
+)
+FAULTS = frozenset({"out_of_paper", "cover_open", "overheating"})
+
+
+def decode_state(payload: bytes) -> tuple[str, ...]:
+    """Names of the A3 status bits that are set (first payload byte)."""
+    flags = payload[0] if payload else 0
+    return tuple(name for bit, name in STATUS_FLAGS if flags & bit)
 
 
 class NotificationParser:
-    """Stream parser: accept only CRC-valid ready/buffer-full notifications."""
+    """Stream parser: accept only CRC-valid printer-to-host frames."""
 
     def __init__(self) -> None:
         self._buffer = bytearray()
 
     def feed(self, data: bytes) -> list[bool]:
-        self._buffer.extend(data)
+        """Flow-control events only: True = ready, False = buffer full."""
         result: list[bool] = []
+        for command, payload in self.packets(data):
+            if command == 0xAE and payload[:1] in (b"\x00", b"\x10"):
+                result.append(payload[0] == 0)
+        return result
+
+    def packets(self, data: bytes) -> list[tuple[int, bytes]]:
+        """CRC-valid printer-to-host frames as (command, payload)."""
+        self._buffer.extend(data)
+        result: list[tuple[int, bytes]] = []
         while len(self._buffer) >= 2:
             start = self._buffer.find(b"\x51\x78")
             if start == -1:
@@ -85,8 +144,8 @@ class NotificationParser:
                 del self._buffer[0]
                 continue
             del self._buffer[:total]
-            if packet[2:6] == b"\xae\x01\x01\x00" and packet[6] in (0, 16):
-                result.append(packet[6] == 0)
+            if packet[3] == 1:
+                result.append((packet[2], packet[6:-2]))
         return result
 
 

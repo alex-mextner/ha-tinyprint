@@ -44,7 +44,7 @@ async def test_print_uses_real_att_and_closes_without_http():
         bytes([0xA5]) * 96,
         2,
         link=link,
-        pacing={"chunk_delay": 0, "row_delay": 0, "settle_delay": 0},
+        pacing={"chunk_delay": 0},
     )
     assert result["confirmation"] == "transport_only"
     assert result["physical_print_confirmed"] is False
@@ -94,7 +94,7 @@ async def test_partial_failure_keeps_counters_and_does_not_replay():
             bytes(96),
             2,
             link=link,
-            pacing={"chunk_delay": 0, "row_delay": 0, "settle_delay": 0},
+            pacing={"chunk_delay": 0},
         )
     assert p.last_result["bytes_written"] > 0
     assert p.last_result["delivery_uncertain"] is True
@@ -212,7 +212,7 @@ async def test_cancel_during_final_cleanup_retains_delivery_uncertainty():
                 bytes(48),
                 1,
                 link=FakeLink(peer),
-                pacing={"chunk_delay": 0, "row_delay": 0, "settle_delay": 0},
+                pacing={"chunk_delay": 0},
             )
     assert p.last_result["bytes_written"] > 0
     assert p.last_result["delivery_uncertain"] is True

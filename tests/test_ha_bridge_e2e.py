@@ -30,7 +30,7 @@ from custom_components.tinyprint.studio_runtime import StudioPrinter
 TOKEN = "E2e-" + "k" * 44
 PRINTER_MAC = "4C:2A:EE:D3:3E:C2"
 ADAPTER_MAC = "00:1A:7D:DA:71:13"
-FAST = dict(chunk_delay=0, row_delay=0, settle_delay=0, pause_timeout=0.5)
+FAST = dict(chunk_delay=0, pause_timeout=0.5)
 BITMAP = bytes(range(48)) * 3
 
 

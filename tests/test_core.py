@@ -41,7 +41,9 @@ def test_bitmap_bit_order_blank_lead_and_last_row():
     assert rows[0][6:54] == bytes(48)
     assert rows[1][6] == 1
     assert rows[-1][53] == 128
-    assert frames[-1] == p.frame(0xA1, b"\x40\x00")
+    assert frames[-2] == p.frame(0xA1, b"\x10\x00")
+    assert frames[-3] == p.frame(0xA1, b"\x30\x00")
+    assert frames[-1] == p.get_state_frame()
 
 
 @pytest.mark.parametrize(
@@ -61,12 +63,34 @@ def test_protocol_limits(bitmap, height, feed):
 
 def test_default_setup_within_documented_values():
     frames = list(p.print_frames(bytes(48), 1, feed=0))
-    assert frames[:3] == [
-        p.frame(0xBD, b"\x10"),
-        p.frame(0xAF, (24000).to_bytes(2, "little")),
+    # Sequence and values of the X6h job that prints on hardware: quality, energy 8000,
+    # text mode, speed 10, rows, feed speed 25, then the state request.
+    assert frames[:4] == [
+        p.frame(0xA4, b"\x33"),
+        p.frame(0xAF, (8000).to_bytes(2, "little")),
         p.frame(0xBE, b"\x01"),
+        p.frame(0xBD, b"\x0a"),
     ]
-    assert frames[-1][2] == 0xA2
+    assert frames[-2:] == [p.frame(0xBD, b"\x19"), p.get_state_frame()]
+    assert p.get_state_frame().hex() == "5178a30001000000ff"
+
+
+def test_speed_is_resent_every_200_rows_and_feed_is_split_in_48_dot_steps():
+    frames = list(p.print_frames(bytes(48 * 400), 400, feed=100))
+    assert [f for f in frames if f[2] == 0xBD] == [p.frame(0xBD, b"\x0a")] * 3 + [
+        p.frame(0xBD, b"\x19")
+    ]
+    feeds = [int.from_bytes(f[6:8], "little") for f in frames if f[2] == 0xA1]
+    assert feeds == [48, 48, 4]
+
+
+def test_state_reply_decoding_and_frame_parsing():
+    parser = p.NotificationParser()
+    payload = bytes([0x80, 0, 0x27])
+    reply = b"\x51\x78\xa3\x01\x03\x00" + payload + bytes([p.crc8(payload), 0xFF])
+    assert parser.packets(reply) == [(0xA3, payload)]
+    assert p.decode_state(bytes([0x85])) == ("out_of_paper", "overheating", "printing")
+    assert p.decode_state(b"") == ()
 
 
 def test_notification_crc_fragmentation_and_noise():
