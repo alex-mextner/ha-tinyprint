@@ -24,6 +24,7 @@
       "not_supported": "This Bluetooth device is not a supported X6h printer",
       "invalid_address": "Invalid Bluetooth MAC address in configuration.",
       "invalid_adapter": "Enter a valid nonzero local Bluetooth adapter MAC.",
+      "invalid_proxy": "Enter the Bluetooth MAC of the ESPHome proxy, for example AA:BB:CC:DD:EE:FF.",
       "invalid_transport": "Select a supported connection mode."
     }
   },
@@ -37,13 +38,15 @@
           "bridge_url": "Bridge URL",
           "bridge_token": "Bridge access token",
           "font_path": "Local Unicode TTF/OTF font path",
-          "adapter_mac": "Local Bluetooth adapter MAC"
+          "adapter_mac": "Local Bluetooth adapter MAC",
+          "proxy_source": "ESPHome proxy Bluetooth MAC"
         },
         "data_description": {
           "transport": "Native uses HA Bluetooth/proxies. Direct LE uses this Linux host without a bridge or key. Bridge is an optional separate server.",
           "bridge_url": "Address of the bridge, for example http://100.64.0.5:8765. Use the Tailscale or LAN address the bridge listens on.",
           "bridge_token": "Leave blank to keep the saved token. On the bridge host, read the file named by TINYPRINT_BRIDGE_TOKEN_FILE in bridge.env (see docs/bridge.md)",
-          "adapter_mac": "Direct LE only: adapter address from bluetoothctl list, not the printer address. No bridge or token."
+          "adapter_mac": "Direct LE only: adapter address from bluetoothctl list, not the printer address. No bridge or token.",
+          "proxy_source": "ESPHome proxy only: Bluetooth MAC of the proxy (the source shown in the Bluetooth integration diagnostics). Printing never falls back to another adapter."
         }
       }
     },
@@ -54,6 +57,7 @@
       "cannot_connect": "The bridge did not answer. Check that it is running and reachable from Home Assistant",
       "invalid_auth": "The bridge rejected the access token",
       "invalid_adapter": "Enter a valid nonzero local Bluetooth adapter MAC.",
+      "invalid_proxy": "Enter the Bluetooth MAC of the ESPHome proxy, for example AA:BB:CC:DD:EE:FF.",
       "invalid_transport": "Select a supported connection mode."
     }
   },
@@ -130,7 +134,8 @@
       "options": {
         "native": "Native Bluetooth",
         "bridge": "TinyPrint bridge",
-        "local_le": "Direct LE on the Home Assistant host"
+        "local_le": "Direct LE on the Home Assistant host",
+        "proxy": "Through a chosen ESPHome Bluetooth proxy"
       }
     }
   }

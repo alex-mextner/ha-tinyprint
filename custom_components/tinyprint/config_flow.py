@@ -22,11 +22,13 @@ from .bridge_wire import check_token_strength
 from .const import (
     CONF_BRIDGE_TOKEN,
     CONF_BRIDGE_URL,
+    CONF_PROXY_SOURCE,
     CONF_TRANSPORT,
     DOMAIN,
     NAME,
     TRANSPORT_BRIDGE,
     TRANSPORT_NATIVE,
+    TRANSPORT_PROXY,
 )
 from .local_le import normalize_adapter_mac
 from .protocol import ADV_UUID
@@ -79,7 +81,7 @@ class TinyPrintConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except KeyError, ValueError:
             return self.async_abort(reason="invalid_address")
         mode = user_input.get("transport", "native")
-        if mode not in ("native", "local_le"):
+        if mode not in ("native", "local_le", TRANSPORT_PROXY):
             return self.async_abort(reason="invalid_transport")
         # HA merges import updates: include defaults so removing YAML settings
         # actually restores native transport instead of retaining old local LE.
@@ -88,7 +90,13 @@ class TinyPrintConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "font_path": user_input.get("font_path", ""),
             "transport": mode,
             "adapter_mac": "",
+            CONF_PROXY_SOURCE: "",
         }
+        if mode == TRANSPORT_PROXY:
+            try:
+                data[CONF_PROXY_SOURCE] = normalize_address(user_input.get(CONF_PROXY_SOURCE) or "")
+            except ValueError:
+                return self.async_abort(reason="invalid_proxy")
         if mode == "local_le":
             try:
                 data["adapter_mac"] = normalize_adapter_mac(user_input.get("adapter_mac"))
@@ -138,7 +146,7 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Required(CONF_TRANSPORT, default=current[CONF_TRANSPORT]): SelectSelector(
                     SelectSelectorConfig(
-                        options=[TRANSPORT_NATIVE, TRANSPORT_BRIDGE, "local_le"],
+                        options=[TRANSPORT_NATIVE, TRANSPORT_BRIDGE, "local_le", TRANSPORT_PROXY],
                         translation_key=CONF_TRANSPORT,
                         mode=SelectSelectorMode.DROPDOWN,
                     )
@@ -152,6 +160,10 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional("font_path", default=current["font_path"]): str,
                 vol.Optional(
                     "adapter_mac", description={"suggested_value": current.get("adapter_mac", "")}
+                ): str,
+                vol.Optional(
+                    CONF_PROXY_SOURCE,
+                    description={"suggested_value": current.get(CONF_PROXY_SOURCE, "")},
                 ): str,
             }
         )
@@ -197,8 +209,20 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                 CONF_TRANSPORT: user_input.get(CONF_TRANSPORT, TRANSPORT_NATIVE),
                 "font_path": user_input.get("font_path", ""),
             }
-            if data[CONF_TRANSPORT] not in (TRANSPORT_NATIVE, TRANSPORT_BRIDGE, "local_le"):
+            if data[CONF_TRANSPORT] not in (
+                TRANSPORT_NATIVE,
+                TRANSPORT_BRIDGE,
+                "local_le",
+                TRANSPORT_PROXY,
+            ):
                 errors[CONF_TRANSPORT] = "invalid_transport"
+            elif data[CONF_TRANSPORT] == TRANSPORT_PROXY:
+                try:
+                    data[CONF_PROXY_SOURCE] = normalize_address(
+                        user_input.get(CONF_PROXY_SOURCE) or ""
+                    )
+                except ValueError:
+                    errors[CONF_PROXY_SOURCE] = "invalid_proxy"
             elif data[CONF_TRANSPORT] == "local_le":
                 try:
                     data["adapter_mac"] = normalize_adapter_mac(user_input.get("adapter_mac"))
@@ -221,6 +245,7 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                     "adapter_mac": source.get(
                         "adapter_mac", self._entry.data.get("adapter_mac", "")
                     ),
+                    CONF_PROXY_SOURCE: source.get(CONF_PROXY_SOURCE, ""),
                     CONF_BRIDGE_URL: source.get(CONF_BRIDGE_URL, ""),
                     "font_path": source.get(
                         "font_path", options.get("font_path", self._entry.data.get("font_path", ""))
