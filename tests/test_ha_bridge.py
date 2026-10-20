@@ -561,14 +561,15 @@ class OptionsFlowTests(BridgeCase):
         result = await self.flow().async_step_init()
         fields = self.fields(result)
         self.assertEqual(
-            set(fields), {"transport", "bridge_url", "bridge_token", "font_path", "adapter_mac"}
+            set(fields),
+            {"transport", "bridge_url", "bridge_token", "font_path", "adapter_mac", "proxy_source"},
         )
         self.assertEqual(fields["bridge_token"].config["type"], "password")
         self.assertEqual(
             {option["value"] for option in fields["transport"].config["options"]}
             if isinstance(fields["transport"].config["options"][0], dict)
             else set(fields["transport"].config["options"]),
-            {"native", "bridge", "local_le"},
+            {"native", "bridge", "local_le", "proxy"},
         )
 
     async def test_form_never_prefills_the_stored_token(self):
@@ -669,7 +670,14 @@ class OptionsFlowTests(BridgeCase):
 class StringsTests(unittest.TestCase):
     def test_option_strings_cover_all_fields_and_errors_in_every_language(self):
         base = Path(__file__).parents[1] / "custom_components/tinyprint"
-        fields = {"transport", "bridge_url", "bridge_token", "font_path", "adapter_mac"}
+        fields = {
+            "transport",
+            "bridge_url",
+            "bridge_token",
+            "font_path",
+            "adapter_mac",
+            "proxy_source",
+        }
         errors = {
             "invalid_url",
             "invalid_token",
@@ -687,7 +695,7 @@ class StringsTests(unittest.TestCase):
             self.assertTrue(errors <= set(data["options"]["error"]), name)
             self.assertEqual(
                 set(data["selector"]["transport"]["options"]),
-                {"native", "bridge", "local_le"},
+                {"native", "bridge", "local_le", "proxy"},
                 name,
             )
         self.assertEqual(

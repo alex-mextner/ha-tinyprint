@@ -15,9 +15,11 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from .bridge_client import BridgeJobError
 from .bridge_runtime import BridgeTransportMixin
 from .connection import connected_client
+from .const import TRANSPORT_PROXY
 from .job import run_owned_job
 from .local_le import run_local_job
 from .protocol import NOTIFY_UUID, WRITE_UUID, FrameCounter
+from .proxy_client import connect_via_proxy
 from .runtime import TinyPrintPrinter
 from .studio_render import bitmap as encode_bitmap
 from .studio_render import render_document
@@ -140,6 +142,11 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
 
     def connection(self) -> Any:
         self.phase("connecting_gatt", "connecting")
+        if self.transport == TRANSPORT_PROXY:
+            return connected_client(
+                self.hass,
+                connect_via_proxy(self.hass, self.address, self.name, self.proxy_source),
+            )
         device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
         if device is None:
             raise HomeAssistantError(

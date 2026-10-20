@@ -14,7 +14,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .bridge_client import BridgeSettings
 from .connection import connected_client
-from .const import TRANSPORT_BRIDGE, TRANSPORT_NATIVE, UPDATE_SIGNAL
+from .const import TRANSPORT_BRIDGE, TRANSPORT_NATIVE, TRANSPORT_PROXY, UPDATE_SIGNAL
 from .job import run_owned_job
 from .render import render_image, render_qr, render_text, to_bitmap
 from .transport import send_bitmap
@@ -34,6 +34,7 @@ class TinyPrintPrinter:
         bridge: BridgeSettings | None = None,
         bridge_error: str | None = None,
         local_adapter: str | None = None,
+        proxy_source: str | None = None,
     ) -> None:
         self.hass = hass
         self.entry_id = entry_id
@@ -50,16 +51,19 @@ class TinyPrintPrinter:
         self.bridge = bridge
         self.bridge_error = bridge_error
         self.adapter_mac = local_adapter
+        self.proxy_source = proxy_source
         self.transport = (
             "local_le"
             if local_adapter is not None
+            else TRANSPORT_PROXY
+            if proxy_source is not None
             else TRANSPORT_BRIDGE
             if bridge or bridge_error
             else TRANSPORT_NATIVE
         )
         self.bridge_state = (
             "native"
-            if self.transport == TRANSPORT_NATIVE
+            if self.transport in (TRANSPORT_NATIVE, TRANSPORT_PROXY)
             else "misconfigured"
             if bridge_error
             else "unchecked"

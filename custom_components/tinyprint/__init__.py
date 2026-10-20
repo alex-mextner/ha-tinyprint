@@ -12,7 +12,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
 from .bridge_client import BridgeConfigError, bridge_settings
-from .const import DOMAIN
+from .const import CONF_PROXY_SOURCE, DOMAIN, TRANSPORT_PROXY
 from .studio import async_register_studio_services, async_setup_panel
 from .studio_runtime import StudioPrinter as TinyPrintPrinter
 
@@ -23,8 +23,9 @@ PRINTER_SCHEMA = vol.Schema(
         vol.Required("address"): cv.string,
         vol.Optional("name", default="TinyPrint X6h"): cv.string,
         vol.Optional("font_path", default=""): cv.string,
-        vol.Optional("transport"): vol.In(("native", "local_le")),
+        vol.Optional("transport"): vol.In(("native", "local_le", TRANSPORT_PROXY)),
         vol.Optional("adapter_mac"): cv.string,
+        vol.Optional(CONF_PROXY_SOURCE): cv.string,
     }
 )
 CONFIG_SCHEMA = vol.Schema(
@@ -103,6 +104,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     local_adapter = (
         (effective.get("adapter_mac") or "") if effective.get("transport") == "local_le" else None
     )
+    proxy_source = (
+        (effective.get(CONF_PROXY_SOURCE) or "")
+        if effective.get("transport") == TRANSPORT_PROXY
+        else None
+    )
     runtime = TinyPrintPrinter(
         hass,
         entry.entry_id,
@@ -112,6 +118,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bridge=bridge,
         bridge_error=bridge_error,
         local_adapter=local_adapter,
+        proxy_source=proxy_source,
     )
     hass.data[DOMAIN][entry.entry_id] = runtime
     try:
