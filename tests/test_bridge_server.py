@@ -22,7 +22,7 @@ protocol = load("protocol")
 TOKEN = "Tk3-" + "x" * 44
 PRINTER_MAC = "4C:2A:EE:D3:3E:C2"
 ADAPTER_MAC = "00:1A:7D:DA:71:13"
-FAST = dict(chunk_delay=0, row_delay=0, settle_delay=0, pause_timeout=0.5)
+FAST = dict(chunk_delay=0, pause_timeout=0.5)
 BITMAP = bytes(range(48)) * 2
 
 
@@ -275,7 +275,8 @@ async def test_print_job_is_accepted_then_polled_to_sent(env):
     final = wire.parse_job_view(await wait_terminal(env, "job-000001"))
     assert final["state"] == "sent" and final["confirmation"] == "transport_only"
     assert final["physical_print_confirmed"] is False
-    assert b"".join(v for _h, v in env.gatt.commands) == b"".join(protocol.print_frames(BITMAP, 2))
+    sent = protocol.get_state_frame() + b"".join(protocol.print_frames(BITMAP, 2))
+    assert b"".join(v for _h, v in env.gatt.commands) == sent
     assert env.link.connects == 1
 
 

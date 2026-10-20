@@ -23,9 +23,13 @@ from .proxy_client import connect_via_proxy
 from .runtime import TinyPrintPrinter
 from .studio_render import bitmap as encode_bitmap
 from .studio_render import render_document
-from .transport import send_bitmap
+from .transport import probe_printer, send_bitmap
 
 _LOGGER = logging.getLogger(__name__)
+
+# An ESP32 proxy silently drops write-without-response packets fed at the direct-link rate
+# (177 bytes every 4 ms); 100 bytes every 20 ms is the pace that prints on an X6h through one.
+PROXY_PACING = {"packet_size": 100, "chunk_delay": 0.02}
 
 
 class TrackedClient:
@@ -193,7 +197,8 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
                 return dict(self.last_result)
             async with self.connection() as client:
                 self.phase("gatt_validation", "printing")
-                stats = await send_bitmap(TrackedClient(client, self), data, height)
+                pacing = PROXY_PACING if self.transport == TRANSPORT_PROXY else {}
+                stats = await send_bitmap(TrackedClient(client, self), data, height, **pacing)
                 self.last_result.update(stats)
             self.phase("sent", "sent")
             return dict(self.last_result)
@@ -271,10 +276,12 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
                     and "write-without-response" in write.properties
                     and "notify" in notify.properties
                 )
+                probe = await probe_printer(client)
             self.last_result.update(
                 {
                     "services": services,
                     "supported_profile": supported,
+                    "probe": probe,
                     "confirmation": "connection_only",
                 }
             )
