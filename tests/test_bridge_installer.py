@@ -13,7 +13,7 @@ INSTALLER = ROOT / "bridge" / "install.sh"
 UNIT = ROOT / "bridge" / "tinyprint-bridge.service"
 PRINTER = "4C:2A:EE:D3:3E:C2"
 ADAPTER = "00:1A:7D:DA:71:13"
-SHARED = {"protocol.py", "transport.py", "att.py", "bridge_wire.py"}
+SHARED = {"protocol.py", "transport.py", "att.py", "bridge_wire.py", "le_link.py"}
 
 
 def run(home, *args, check=True):

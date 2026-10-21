@@ -93,9 +93,9 @@ class TinyPrintPanel extends HTMLElement {
               <details id="qr-options"><summary>Размер и надёжность QR</summary><div class="row"><div class="field"><label for="qr_size">Размер QR, точки</label><input id="qr_size" data-option="qr_size" data-number type="number" min="96" max="360" value="320"></div><div class="field"><label for="qr_correction">Коррекция ошибок</label><select id="qr_correction" data-option="qr_correction"><option value="M">M · стандартная</option><option value="Q">Q · повышенная</option><option value="H">H · максимальная</option></select></div></div></details>
             </fieldset>
             <div class="buttons"><button id="preview" class="button">Предпросмотр</button><button id="print" class="button primary" disabled>Печатать</button><button id="cancel" class="button" hidden>Остановить</button></div>
-            <p class="hint">Печать — только по кнопке. После изменения макета обновите предпросмотр.</p>
+            <p class="hint">После изменения макета обновите предпросмотр.</p>
           </section>
-          <section class="card preview-card" aria-label="Предпросмотр печати"><div class="preview-head"><h2>На бумаге</h2><span class="badge">384 точки</span></div><div class="canvas"><div id="empty" class="empty"><span class="symbol" aria-hidden="true">▤</span>Выберите шаблон или картинку<br>и нажмите «Предпросмотр».</div><img id="raster" alt="Готовый чёрно-белый растр для печати" hidden></div><div class="caption"><span id="dimensions">Предпросмотр не отправляет печать</span><span id="ink"></span></div><p class="hint">Это финальный растр. Контраст на настоящей бумаге зависит от принтера и ленты.</p><div id="notice" role="status" aria-live="polite" hidden></div><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Изображение включается в данные только при явном копировании.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
+          <section class="card preview-card" aria-label="Предпросмотр печати"><div class="preview-head"><h2>На бумаге</h2><span class="badge">384 точки</span></div><div class="canvas"><div id="empty" class="empty"><span class="symbol" aria-hidden="true">▤</span>Выберите шаблон или картинку<br>и нажмите «Предпросмотр».</div><img id="raster" alt="Готовый чёрно-белый растр для печати" hidden></div><div class="caption"><span id="dimensions">Готов к предпросмотру</span><span id="ink"></span></div><p class="hint"></p><div id="notice" role="status" aria-live="polite" hidden></div><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Изображение включается в данные только при явном копировании.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
         </div>
       </main>`;
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => this.switchMode(button.dataset.mode)));
@@ -167,10 +167,11 @@ class TinyPrintPanel extends HTMLElement {
   deviceStatus() {
     const printer = this.printers?.find(p => p.device_id === this.$('#device').value);
     const bridge = printer?.transport?.mode === 'bridge';
+    const localLE = printer?.transport?.mode === 'local_le';
     // Bridge reachability says nothing about the printer's own radio link; only diagnose proves that.
     const bridgeStates = {reachable:'Мост доступен', busy:'Мост занят заданием', auth_failed:'Ошибка доступа к мосту', unreachable:'Мост недоступен', misconfigured:'Мост настроен неверно', unchecked:'Проверка моста'};
-    this.$('#device-status').textContent = !printer ? 'Офлайн-предпросмотр' : bridge ? (bridgeStates[printer.transport.bridge_state] || 'Состояние моста неизвестно') : (printer.visible ? 'Виден по Bluetooth' : 'Не виден по Bluetooth');
-    this.$('#diagnose').textContent = bridge ? 'Проверить через мост' : 'Проверить Bluetooth';
+    this.$('#device-status').textContent = !printer ? 'Офлайн-предпросмотр' : bridge ? (bridgeStates[printer.transport.bridge_state] || 'Состояние моста неизвестно') : localLE ? (printer.visible ? 'Принтер обнаружен' : 'Принтер не найден') : (printer.visible ? 'Виден по Bluetooth' : 'Не виден по Bluetooth');
+    this.$('#diagnose').textContent = bridge ? 'Проверить через мост' : localLE ? 'Проверить подключение' : 'Проверить Bluetooth';
     // In bridge mode Bluetooth fields come from Home Assistant's own radio, not the printer's link.
     if (printer) this.$('#diagnostic-data').textContent = JSON.stringify({status: printer.status, transport: printer.transport, last_error: printer.last_error, [bridge ? 'local_rssi_raw' : 'rssi_raw']: printer.rssi_raw, ...printer.last_result}, null, 2);
   }
@@ -272,18 +273,18 @@ class TinyPrintPanel extends HTMLElement {
       this.$('#raster').hidden = false; this.$('#empty').hidden = true;
       this.$('#dimensions').textContent = `${result.width} × ${result.height} точек`;
       this.$('#ink').textContent = `Чёрного: ${result.ink_percent}%`;
-      this.notice(this.$('#device').value ? 'Предпросмотр готов. Печать ещё не отправлена.' : 'Предпросмотр готов. Для печати добавьте принтер в HA.');
+      this.notice(this.$('#device').value ? 'Предпросмотр готов.' : 'Предпросмотр готов. Для печати добавьте принтер в HA.');
     } catch (error) { this.signature = ''; this.notice(error.message || String(error), true); }
     finally { this.busy = false; this.buttons(); }
   }
   async print() {
     if (this.busy || !this.signature || this.signature !== this.currentSignature()) return;
     this.busy = true; this.printing = true; this.activeDevice = this.$('#device').value;
-    this.buttons(); this.notice('Подключаюсь и передаю задание. Автоматических повторов нет.');
+    this.buttons(); this.notice('Подключаюсь к принтеру…');
     try {
       const result = await this.call('print_document', {device_id: this.activeDevice, document: this.document(), expected_sha256: this.preview.bitmap_sha256});
       this.$('#diagnostic-data').textContent = JSON.stringify(result, null, 2);
-      this.notice('Данные переданы принтеру. Проверьте текст и QR на бумаге — BLE не подтверждает качество отпечатка.');
+      this.notice('Данные отправлены. Проверьте отпечаток.');
     } catch (error) { this.notice(error.message || String(error), true); }
     finally { this.busy = false; this.printing = false; this.buttons(); await this.loadInfo(); }
   }
@@ -296,7 +297,7 @@ class TinyPrintPanel extends HTMLElement {
   }
   async diagnose() {
     if (this.busy || !this.$('#device').value) return;
-    this.busy = true; this.buttons(); this.notice('Проверяю GATT-соединение. Команды печати не отправляются.');
+    this.busy = true; this.buttons(); this.notice('Проверяю соединение с принтером…');
     try {
       const result = await this.call('diagnose', {device_id: this.$('#device').value});
       this.$('#diagnostic-data').textContent = JSON.stringify(result, null, 2); this.$('#diagnostics').open = true;

@@ -393,17 +393,17 @@ class SetupTests(BridgeCase):
         self.assertIsNone(printer.bridge)
         self.assertEqual(printer.bridge_state, "misconfigured")
 
-    async def test_version_is_0_2_1_everywhere(self):
+    async def test_component_versions_match_release(self):
         from custom_components.tinyprint.studio import PANEL_VERSION
 
         manifest = Path(__file__).parents[1] / "custom_components/tinyprint/manifest.json"
-        self.assertEqual(json.loads(manifest.read_text())["version"], "0.2.1")
-        self.assertEqual(PANEL_VERSION, "0.2.1")
+        self.assertEqual(json.loads(manifest.read_text())["version"], "0.2.2")
+        self.assertEqual(PANEL_VERSION, "0.2.2")
         printer = self.printer()
         report = await async_get_config_entry_diagnostics(
             self.hass, SimpleNamespace(entry_id="entry")
         )
-        self.assertEqual(report["version"], "0.2.1")
+        self.assertEqual(report["version"], "0.2.2")
         self.assertIsNotNone(printer)
 
 
@@ -560,13 +560,15 @@ class OptionsFlowTests(BridgeCase):
     async def test_form_offers_transport_and_password_token(self):
         result = await self.flow().async_step_init()
         fields = self.fields(result)
-        self.assertEqual(set(fields), {"transport", "bridge_url", "bridge_token", "font_path"})
+        self.assertEqual(
+            set(fields), {"transport", "bridge_url", "bridge_token", "font_path", "adapter_mac"}
+        )
         self.assertEqual(fields["bridge_token"].config["type"], "password")
         self.assertEqual(
             {option["value"] for option in fields["transport"].config["options"]}
             if isinstance(fields["transport"].config["options"][0], dict)
             else set(fields["transport"].config["options"]),
-            {"native", "bridge"},
+            {"native", "bridge", "local_le"},
         )
 
     async def test_form_never_prefills_the_stored_token(self):
@@ -667,7 +669,7 @@ class OptionsFlowTests(BridgeCase):
 class StringsTests(unittest.TestCase):
     def test_option_strings_cover_all_fields_and_errors_in_every_language(self):
         base = Path(__file__).parents[1] / "custom_components/tinyprint"
-        fields = {"transport", "bridge_url", "bridge_token", "font_path"}
+        fields = {"transport", "bridge_url", "bridge_token", "font_path", "adapter_mac"}
         errors = {
             "invalid_url",
             "invalid_token",
@@ -684,7 +686,9 @@ class StringsTests(unittest.TestCase):
             )
             self.assertTrue(errors <= set(data["options"]["error"]), name)
             self.assertEqual(
-                set(data["selector"]["transport"]["options"]), {"native", "bridge"}, name
+                set(data["selector"]["transport"]["options"]),
+                {"native", "bridge", "local_le"},
+                name,
             )
         self.assertEqual(
             (base / "strings.json").read_text(), (base / "translations/en.json").read_text()

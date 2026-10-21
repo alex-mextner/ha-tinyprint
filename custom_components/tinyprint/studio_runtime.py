@@ -16,6 +16,7 @@ from .bridge_client import BridgeJobError
 from .bridge_runtime import BridgeTransportMixin
 from .connection import connected_client
 from .job import run_owned_job
+from .local_le import run_local_job
 from .protocol import NOTIFY_UUID, WRITE_UUID, FrameCounter
 from .runtime import TinyPrintPrinter
 from .studio_render import bitmap as encode_bitmap
@@ -174,6 +175,11 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
                 if not render.cancelled():
                     render.exception()
                 raise
+            if self.transport == "local_le":
+                self.phase("local_config", "connecting")
+                self.last_result.update(await run_local_job(self, "print", data, height))
+                self.phase("sent", "sent")
+                return dict(self.last_result)
             if self.transport == "bridge":
                 await self._run_bridge_job("print", data, height)
                 self.phase("sent", "sent")
@@ -208,7 +214,7 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
             detail = (
                 "Partial delivery is possible; no automatic replay."
                 if partial
-                else "No raster writes were attempted."
+                else "Проверьте подключение принтера."
             )
             raise HomeAssistantError(
                 f"Printer failed at {failure_phase} ({type(error).__name__}). {detail}"
@@ -227,6 +233,11 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
         self.begin()
         try:
             self._require_bridge()
+            if self.transport == "local_le":
+                self.phase("local_config", "connecting")
+                self.last_result.update(await run_local_job(self, "diagnose"))
+                self.phase("diagnosed", "idle")
+                return dict(self.last_result)
             if self.transport == "bridge":
                 await self._run_bridge_job("diagnose")
                 self.phase("diagnosed", "idle")
