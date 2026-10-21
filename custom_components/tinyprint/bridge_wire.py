@@ -43,6 +43,7 @@ JOB_ERROR_CODES = (
     "write_failed",
     "flow_pause_timeout",
     "transfer_timeout",
+    "printer_fault",
     "cancelled",
     "internal_error",
 )

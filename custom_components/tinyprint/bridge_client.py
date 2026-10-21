@@ -390,6 +390,7 @@ _HINTS = {
     "unauthorized": " Check the bridge token in the TinyPrint options.",
     "unreachable": " Check that the bridge is running and the address in the options is right.",
     "busy": " Wait for the running job or cancel it.",
+    "printer_fault": " Check the printer's paper, cover and temperature, then print again.",
 }
 
 

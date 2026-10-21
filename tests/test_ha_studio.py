@@ -495,6 +495,44 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["confirmation"], "connection_only")
         self.assertTrue(result["supported_profile"])
 
+    async def test_diagnose_reports_an_unsupported_profile_instead_of_failing(self):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None)
+        chars = {"2a37": SimpleNamespace(uuid="2a37", properties=["notify"])}
+
+        class Services:
+            def __iter__(self):
+                return iter([SimpleNamespace(uuid="service", characteristics=list(chars.values()))])
+
+            def get_characteristic(self, uuid):
+                return chars.get(uuid)
+
+        client = SimpleNamespace(
+            services=Services(),
+            is_connected=True,
+            disconnect=AsyncMock(),
+            write_gatt_char=AsyncMock(side_effect=RuntimeError("characteristic not found")),
+            start_notify=AsyncMock(),
+            stop_notify=AsyncMock(),
+        )
+        with (
+            patch(
+                "custom_components.tinyprint.studio_runtime.bluetooth.async_ble_device_from_address",
+                return_value=object(),
+            ),
+            patch(
+                "custom_components.tinyprint.studio_runtime.establish_connection",
+                new=AsyncMock(return_value=client),
+            ),
+            patch("custom_components.tinyprint.transport.asyncio.sleep", new=AsyncMock()),
+        ):
+            result = await printer.async_diagnose()
+        client.write_gatt_char.assert_not_awaited()
+        self.assertFalse(result["supported_profile"])
+        self.assertEqual(result["confirmation"], "connection_only")
+        client.disconnect.assert_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

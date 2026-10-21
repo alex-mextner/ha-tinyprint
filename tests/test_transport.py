@@ -244,3 +244,53 @@ def test_fault_before_the_job_stops_it_without_sending_raster():
         assert client.writes == [GET_STATE] and client.disconnected
 
     asyncio.run(check())
+
+
+def test_state_poll_writes_are_counted_so_stats_match_the_wire():
+    async def check():
+        client = FakeClient(replies=(0, 0x80, 0x80, 0x00))
+        stats = await t.send_bitmap(client, bytes(48), 1, **KW | dict(state_poll=0.001))
+        assert client.writes.count(GET_STATE) == 4  # precheck + final + two polls
+        assert stats["bytes_written"] == sum(map(len, client.writes))
+        # The closing state request is part of the job's frames; each poll adds one more.
+        assert stats["frames_written"] == len(list(t.print_frames(bytes(48), 1))) + 2
+
+    asyncio.run(check())
+
+
+class NoProfileClient:
+    """A connectable device that exposes a notifying characteristic but no AE01/AE02."""
+
+    def __init__(self):
+        self.characteristic = types.SimpleNamespace(
+            uuid="00002a37-0000-1000-8000-00805f9b34fb", properties=["notify"]
+        )
+        self.services = self
+        self.writes = []
+        self.unsubscribed = []
+
+    def __iter__(self):
+        return iter([types.SimpleNamespace(characteristics=[self.characteristic])])
+
+    def get_characteristic(self, uuid):
+        return None
+
+    async def start_notify(self, characteristic, callback):
+        pass
+
+    async def stop_notify(self, characteristic):
+        self.unsubscribed.append(characteristic)
+
+    async def write_gatt_char(self, uuid, data, response):
+        self.writes.append(bytes(data))
+        raise RuntimeError("characteristic not found")
+
+
+def test_probe_survives_a_device_without_the_printer_profile():
+    async def check():
+        client = NoProfileClient()
+        assert await t.probe_printer(client, wait=0) == []
+        assert client.writes == []
+        assert client.unsubscribed == [client.characteristic]
+
+    asyncio.run(check())

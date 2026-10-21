@@ -15,10 +15,16 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from .connection import CONNECT_DEADLINE
+
 _LOGGER = logging.getLogger(__name__)
 CONNECT_ATTEMPTS = 3
 CONNECT_TIMEOUT = 20.0
 RETRY_DELAY = 1.0
+# connected_client cancels the connect at CONNECT_DEADLINE; retrying must end sooner so the
+# caller gets the last connect error instead of a bare timeout, with room for cleanup.
+CONNECT_BUDGET = CONNECT_DEADLINE - 5.0
+MIN_ATTEMPT_TIMEOUT = 5.0
 
 
 async def _quiet_disconnect(client: BleakClient) -> None:
@@ -36,7 +42,10 @@ async def connect_via_proxy(
     Only the connection is retried: nothing has been sent to the printer yet.
     """
     last_error: Exception | None = None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CONNECT_BUDGET
     for attempt in range(1, CONNECT_ATTEMPTS + 1):
+        attempt_timeout = min(CONNECT_TIMEOUT, deadline - loop.time())
         found = next(
             (
                 item
@@ -57,7 +66,7 @@ async def connect_via_proxy(
         def backend(*args, **kwargs):
             return connector.client(*args, **kwargs)
 
-        client = BleakClient(found.ble_device, backend=backend, timeout=CONNECT_TIMEOUT)
+        client = BleakClient(found.ble_device, backend=backend, timeout=attempt_timeout)
         try:
             await client.connect()
         except (BleakError, TimeoutError) as error:
@@ -70,6 +79,11 @@ async def connect_via_proxy(
                 attempt,
                 type(error).__name__,
             )
+            if (
+                attempt == CONNECT_ATTEMPTS
+                or deadline - loop.time() - RETRY_DELAY < MIN_ATTEMPT_TIMEOUT
+            ):
+                break
             await asyncio.sleep(RETRY_DELAY)
             continue
         except BaseException:

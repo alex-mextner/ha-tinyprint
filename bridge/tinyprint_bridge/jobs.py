@@ -35,6 +35,7 @@ ERROR_MESSAGES = {
     "write_failed": "Writing to the printer failed",
     "flow_pause_timeout": "The printer stayed in flow-control pause for too long",
     "transfer_timeout": "The transfer exceeded its time budget",
+    "printer_fault": "The printer reported a paper, cover or heat fault",
     "cancelled": "The job was cancelled",
     "internal_error": "Internal bridge error",
 }
@@ -263,6 +264,8 @@ class JobManager:
             if isinstance(error, TimeoutError):
                 return "connect_timeout"
             return "connect_failed" if isinstance(error, OSError) else "internal_error"
+        if isinstance(error, transport.PrinterFaultError):
+            return "printer_fault"
         if isinstance(error, att.ProfileError | ValueError):
             return "profile_unsupported"
         if isinstance(error, att.AttTimeout):
