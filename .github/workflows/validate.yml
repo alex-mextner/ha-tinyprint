@@ -13,9 +13,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - run: pip install pytest pytest-asyncio Pillow==12.3.0 qrcode==8.2 ruff
-      - run: python -m pytest tests/test_core.py tests/test_transport.py -q
+      - run: pip install pytest pytest-asyncio Pillow==12.3.0 qrcode==8.2 ruff opencv-python-headless
+      - run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+      - run: python -m pytest tests/test_core.py tests/test_transport.py tests/test_studio_render.py -q
       - run: ruff check . && ruff format --check .
+      - name: Prepare formatter suggestions without bypassing validation
+        if: failure()
+        run: |
+          ruff check --fix . || true
+          ruff format .
+          git diff --binary > formatting.patch
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: formatting-suggestions
+          path: formatting.patch
   home-assistant:
     runs-on: ubuntu-latest
     steps:
@@ -25,7 +37,24 @@ jobs:
           docker run --rm --entrypoint /bin/sh -v "$PWD:/workspace" -w /workspace
           ghcr.io/home-assistant/home-assistant:2026.9.3
           -c 'python -m pip install --target /tmp/test-deps --no-deps qrcode==8.2 &&
-          PYTHONPATH=/workspace:/tmp/test-deps python -m unittest discover -s tests -p test_ha.py -v'
+          PYTHONPATH=/workspace:/tmp/test-deps python -m unittest discover -s tests -p "test_ha*.py" -v'
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install Pillow==12.3.0 qrcode==8.2 playwright
+      - run: python -m playwright install --with-deps chromium
+      - run: python tests/browser_studio.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-browser-proof-mock-ha
+          path: |
+            verification/studio-*.png
+            verification/browser-results.json
   hassfest:
     runs-on: ubuntu-latest
     steps:

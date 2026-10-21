@@ -11,7 +11,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
-from .runtime import TinyPrintPrinter
+from .studio import async_register_studio_services, async_setup_panel
+from .studio_runtime import StudioPrinter as TinyPrintPrinter
 
 PLATFORMS = [Platform.BUTTON, Platform.SENSOR]
 PRINTER_SCHEMA = vol.Schema(
@@ -33,6 +34,7 @@ CONFIG_SCHEMA = vol.Schema(
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     hass.data.setdefault(DOMAIN, {})
+    await async_register_studio_services(hass)
 
     async def handle(call: ServiceCall) -> dict[str, Any]:
         printers = hass.data[DOMAIN]
@@ -92,6 +94,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     hass.data[DOMAIN][entry.entry_id] = runtime
     try:
+        await async_setup_panel(hass)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
         hass.data[DOMAIN].pop(entry.entry_id, None)

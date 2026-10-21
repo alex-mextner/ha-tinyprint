@@ -18,7 +18,9 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "bluetooth"
+    "bluetooth",
+    "http",
+    "panel_custom"
   ],
   "documentation": "https://github.com/alex-mextner/ha-tinyprint",
   "integration_type": "device",
@@ -27,5 +29,5 @@
   "requirements": [
     "qrcode==8.2"
   ],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
