@@ -55,6 +55,19 @@ SPEED = 10
 FEED_SPEED = 25
 SPEED_REFRESH_ROWS = 200
 FEED_STEP = 48
+# Blank raster rows that must follow the last ink row (203 dpi = 8 rows/mm: 96 rows = 12 mm).
+# The printer swallowed the last lines when only the A1 feed followed the raster.
+DEFAULT_TAIL_ROWS = 96
+MAX_TAIL_ROWS = 512
+
+
+def normalize_tail_rows(value: object) -> int:
+    """Validate the blank-tail length; 0 disables the tail."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != int(value):
+        raise ValueError("Tail must be a whole number of rows")
+    if not 0 <= value <= MAX_TAIL_ROWS:
+        raise ValueError("Tail out of range")
+    return int(value)
 
 
 def get_state_frame() -> bytes:
@@ -62,23 +75,37 @@ def get_state_frame() -> bytes:
     return frame(CMD_GET_STATE, b"\x00")
 
 
-def print_frames(bitmap: bytes, height: int, *, feed: int = 64) -> Iterator[bytes]:
+def print_frames(
+    bitmap: bytes, height: int, *, feed: int = 64, tail_rows: int = DEFAULT_TAIL_ROWS
+) -> Iterator[bytes]:
     """Convert MSB-first, black=1 bitmap to bounded raw-raster print frames.
 
+    The raster is followed by blank rows so that `tail_rows` blank rows (counting the ones
+    the bitmap already ends with) trail the last ink; 0 disables the tail. This is the only
+    place that pads a job, so every transport gets it exactly once.
     The job ends with an A3 state request: its reply is the printer's job-consumed signal.
     """
     if not 1 <= height <= MAX_ROWS or len(bitmap) != height * ROW_BYTES:
         raise ValueError("Bitmap must contain 1..2048 rows of 384 dots")
     if not 0 <= feed <= 512:
         raise ValueError("Feed must be between 0 and 512 rows")
+    if not 0 <= tail_rows <= MAX_TAIL_ROWS:
+        raise ValueError(f"Tail must be between 0 and {MAX_TAIL_ROWS} rows")
+    existing_blank = (len(bitmap) - len(bitmap.rstrip(b"\x00"))) // ROW_BYTES
+    padding = max(0, tail_rows - existing_blank)
     speed = frame(CMD_SPEED, bytes((SPEED,)))
     yield frame(CMD_QUALITY, bytes((QUALITY,)))
     yield frame(CMD_ENERGY, struct.pack("<H", TEXT_ENERGY))
     yield frame(CMD_MODE, b"\x01")
     yield speed
     yield frame(CMD_RAW_ROW, bytes(ROW_BYTES))  # blank lead prevents first-row artifacts
-    for index, offset in enumerate(range(0, len(bitmap), ROW_BYTES), start=1):
-        yield frame(CMD_RAW_ROW, bitmap[offset : offset + ROW_BYTES].translate(_REVERSE))
+    blank_row = frame(CMD_RAW_ROW, bytes(ROW_BYTES))
+    for index in range(1, height + padding + 1):
+        if index <= height:
+            offset = (index - 1) * ROW_BYTES
+            yield frame(CMD_RAW_ROW, bitmap[offset : offset + ROW_BYTES].translate(_REVERSE))
+        else:
+            yield blank_row
         if index % SPEED_REFRESH_ROWS == 0:
             yield speed
     yield frame(CMD_SPEED, bytes((FEED_SPEED,)))

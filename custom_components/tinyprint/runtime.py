@@ -16,6 +16,7 @@ from .bridge_client import BridgeSettings
 from .connection import connected_client
 from .const import TRANSPORT_BRIDGE, TRANSPORT_NATIVE, TRANSPORT_PROXY, UPDATE_SIGNAL
 from .job import run_owned_job
+from .protocol import DEFAULT_TAIL_ROWS
 from .render import render_image, render_qr, render_text, to_bitmap
 from .transport import send_bitmap
 
@@ -35,6 +36,7 @@ class TinyPrintPrinter:
         bridge_error: str | None = None,
         local_adapter: str | None = None,
         proxy_source: str | None = None,
+        tail_rows: int = DEFAULT_TAIL_ROWS,
     ) -> None:
         self.hass = hass
         self.entry_id = entry_id
@@ -52,6 +54,7 @@ class TinyPrintPrinter:
         self.bridge_error = bridge_error
         self.adapter_mac = local_adapter
         self.proxy_source = proxy_source
+        self.tail_rows = tail_rows
         self.transport = (
             "local_le"
             if local_adapter is not None
@@ -142,7 +145,9 @@ class TinyPrintPrinter:
                 ),
             ) as client:
                 self.update("printing")
-                self.last_result = await send_bitmap(client, bitmap, height)
+                self.last_result = await send_bitmap(
+                    client, bitmap, height, tail_rows=self.tail_rows
+                )
             self.update("sent")
             _LOGGER.info(
                 "TinyPrint job sent: rows=%s bytes=%s confirmation=transport_only",

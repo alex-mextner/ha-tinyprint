@@ -39,14 +39,16 @@
           "bridge_token": "Bridge access token",
           "font_path": "Local Unicode TTF/OTF font path",
           "adapter_mac": "Local Bluetooth adapter MAC",
-          "proxy_source": "ESPHome proxy Bluetooth MAC"
+          "proxy_source": "ESPHome proxy Bluetooth MAC",
+          "tail_feed_lines": "Blank rows after the last line"
         },
         "data_description": {
           "transport": "Native uses HA Bluetooth/proxies. Direct LE uses this Linux host without a bridge or key. Bridge is an optional separate server.",
           "bridge_url": "Address of the bridge, for example http://100.64.0.5:8765. Use the Tailscale or LAN address the bridge listens on.",
           "bridge_token": "Leave blank to keep the saved token. On the bridge host, read the file named by TINYPRINT_BRIDGE_TOKEN_FILE in bridge.env (see docs/bridge.md)",
           "adapter_mac": "Direct LE only: adapter address from bluetoothctl list, not the printer address. No bridge or token.",
-          "proxy_source": "ESPHome proxy only: Bluetooth MAC of the proxy (the source shown in the Bluetooth integration diagnostics). Printing never falls back to another adapter."
+          "proxy_source": "ESPHome proxy only: Bluetooth MAC of the proxy (the source shown in the Bluetooth integration diagnostics). Printing never falls back to another adapter.",
+          "tail_feed_lines": "Blank rows (8 per mm) always fed after the last printed row so the last lines are not cut off. 0 disables; default 96 (12 mm). With the TinyPrint bridge, set TINYPRINT_BRIDGE_TAIL_FEED_LINES on the bridge instead."
         }
       }
     },
@@ -58,7 +60,8 @@
       "invalid_auth": "The bridge rejected the access token",
       "invalid_adapter": "Enter a valid nonzero local Bluetooth adapter MAC.",
       "invalid_proxy": "Enter the Bluetooth MAC of the ESPHome proxy, for example AA:BB:CC:DD:EE:FF.",
-      "invalid_transport": "Select a supported connection mode."
+      "invalid_transport": "Select a supported connection mode.",
+      "invalid_tail": "Enter a whole number of rows from 0 to 512."
     }
   },
   "entity": {

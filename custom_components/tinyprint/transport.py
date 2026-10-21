@@ -8,6 +8,7 @@ from typing import Any
 
 from .protocol import (
     CMD_GET_STATE,
+    DEFAULT_TAIL_ROWS,
     FAULTS,
     NOTIFY_UUID,
     WRITE_UUID,
@@ -116,6 +117,7 @@ async def send_bitmap(
     height: int,
     *,
     feed: int = 64,
+    tail_rows: int = DEFAULT_TAIL_ROWS,
     packet_size: int = 20,
     chunk_delay: float = 0.006,
     state_poll: float = 3.0,
@@ -169,7 +171,7 @@ async def send_bitmap(
 
     try:
         async with asyncio.timeout(
-            transfer_timeout(height) if total_timeout is None else total_timeout
+            transfer_timeout(height + tail_rows) if total_timeout is None else total_timeout
         ):
             write = client.services.get_characteristic(WRITE_UUID)
             notify = client.services.get_characteristic(NOTIFY_UUID)
@@ -181,7 +183,9 @@ async def send_bitmap(
             ):
                 raise ValueError("Unsupported GATT profile: AE01 write and AE02 notify required")
             # Validate geometry before any write (generator is evaluated on iteration).
-            frames = await asyncio.to_thread(lambda: list(print_frames(bitmap, height, feed=feed)))
+            frames = await asyncio.to_thread(
+                lambda: list(print_frames(bitmap, height, feed=feed, tail_rows=tail_rows))
+            )
             await client.start_notify(NOTIFY_UUID, notification)
             notified = True
             # A fault now would only make the printer discard the raster: fail before it.

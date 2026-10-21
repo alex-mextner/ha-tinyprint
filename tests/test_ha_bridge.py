@@ -562,7 +562,15 @@ class OptionsFlowTests(BridgeCase):
         fields = self.fields(result)
         self.assertEqual(
             set(fields),
-            {"transport", "bridge_url", "bridge_token", "font_path", "adapter_mac", "proxy_source"},
+            {
+                "transport",
+                "bridge_url",
+                "bridge_token",
+                "font_path",
+                "adapter_mac",
+                "proxy_source",
+                "tail_feed_lines",
+            },
         )
         self.assertEqual(fields["bridge_token"].config["type"], "password")
         self.assertEqual(
@@ -666,6 +674,33 @@ class OptionsFlowTests(BridgeCase):
         )
         self.assertEqual(result["data"], {"transport": "native", "font_path": "/g.ttf"})
 
+    async def test_tail_is_stored_as_whole_rows_and_zero_is_kept(self):
+        for given, stored in ((96.0, 96), (0, 0), (512, 512)):
+            result = await self.flow().async_step_init(
+                {"transport": "native", "font_path": "", "tail_feed_lines": given}
+            )
+            self.assertEqual(result["type"], "create_entry")
+            self.assertEqual(result["data"]["tail_feed_lines"], stored)
+            self.assertIsInstance(result["data"]["tail_feed_lines"], int)
+
+    async def test_invalid_tail_keeps_the_form(self):
+        for bad in (-1, 513, 2.5, "x"):
+            result = await self.flow().async_step_init(
+                {"transport": "native", "font_path": "", "tail_feed_lines": bad}
+            )
+            self.assertEqual(result["type"], "form", bad)
+            self.assertEqual(result["errors"], {"tail_feed_lines": "invalid_tail"}, bad)
+
+    async def test_form_defaults_to_96_and_suggests_the_stored_tail(self):
+        def defaults(result):
+            return {
+                m.schema: m.default() for m in result["data_schema"].schema if callable(m.default)
+            }
+
+        self.assertEqual(defaults(await self.flow().async_step_init())["tail_feed_lines"], 96)
+        stored = await self.flow({"tail_feed_lines": 40}).async_step_init()
+        self.assertEqual(defaults(stored)["tail_feed_lines"], 40)
+
 
 class StringsTests(unittest.TestCase):
     def test_option_strings_cover_all_fields_and_errors_in_every_language(self):
@@ -677,8 +712,10 @@ class StringsTests(unittest.TestCase):
             "font_path",
             "adapter_mac",
             "proxy_source",
+            "tail_feed_lines",
         }
         errors = {
+            "invalid_tail",
             "invalid_url",
             "invalid_token",
             "token_required",

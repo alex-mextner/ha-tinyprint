@@ -269,6 +269,29 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("PRIVATE CONTENT", "\n".join(logs.output))
         self.assertEqual(printer.status, "error")
 
+    async def test_configured_tail_rows_reach_the_transport(self):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None, tail_rows=40)
+        default = StudioPrinter(self.hass, "two", "AA:BB:CC:DD:EE:FF", "Test", None)
+        client = SimpleNamespace(is_connected=True, disconnect=AsyncMock())
+        for target, expected in ((printer, 40), (default, 96)):
+            transmit = AsyncMock(return_value={"confirmation": "transport_only"})
+            with (
+                patch.object(target, "_render", return_value=(bytes(48), 1)),
+                patch(
+                    "custom_components.tinyprint.studio_runtime.bluetooth.async_ble_device_from_address",
+                    return_value=object(),
+                ),
+                patch(
+                    "custom_components.tinyprint.studio_runtime.establish_connection",
+                    new=AsyncMock(return_value=client),
+                ),
+                patch("custom_components.tinyprint.studio_runtime.send_bitmap", new=transmit),
+            ):
+                await target.async_print("text", "Hello")
+            self.assertEqual(transmit.await_args.kwargs["tail_rows"], expected)
+
     async def test_user_cancel_reports_neutral_reason_and_releases_connection(self):
         from custom_components.tinyprint.studio_runtime import StudioPrinter
 

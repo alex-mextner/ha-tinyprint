@@ -12,7 +12,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from ._shared import bridge_wire
+from ._shared import bridge_wire, protocol
 
 DEFAULT_BIND = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -31,6 +31,7 @@ class BridgeConfig:
     token: str = field(repr=False)
     bind: str = DEFAULT_BIND
     port: int = DEFAULT_PORT
+    tail_rows: int = protocol.DEFAULT_TAIL_ROWS
 
     @property
     def is_wildcard(self) -> bool:
@@ -91,6 +92,19 @@ def parse_port(value: object) -> int:
     return port
 
 
+def parse_tail_rows(value: object) -> int:
+    setting = "TINYPRINT_BRIDGE_TAIL_FEED_LINES"
+    try:
+        rows = int(str(value))
+    except ValueError:
+        raise ConfigError(
+            f"{setting} must be an integer from 0 to {protocol.MAX_TAIL_ROWS}"
+        ) from None
+    if not 0 <= rows <= protocol.MAX_TAIL_ROWS:
+        raise ConfigError(f"{setting} must be an integer from 0 to {protocol.MAX_TAIL_ROWS}")
+    return rows
+
+
 def load_config(
     env: Mapping[str, str], *, bind: str | None = None, port: int | None = None
 ) -> BridgeConfig:
@@ -114,4 +128,7 @@ def load_config(
     port_value = parse_port(
         port if port is not None else env.get("TINYPRINT_BRIDGE_PORT", DEFAULT_PORT)
     )
-    return BridgeConfig(printer, adapter, token, bind_value, port_value)
+    tail_rows = parse_tail_rows(
+        env.get("TINYPRINT_BRIDGE_TAIL_FEED_LINES", protocol.DEFAULT_TAIL_ROWS)
+    )
+    return BridgeConfig(printer, adapter, token, bind_value, port_value, tail_rows)

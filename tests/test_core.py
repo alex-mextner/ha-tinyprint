@@ -35,7 +35,7 @@ def test_captured_frame():
 
 def test_bitmap_bit_order_blank_lead_and_last_row():
     bitmap = b"\x80" + bytes(47) + bytes(47) + b"\x01"
-    frames = list(p.print_frames(bitmap, 2, feed=64))
+    frames = list(p.print_frames(bitmap, 2, feed=64, tail_rows=0))
     rows = [f for f in frames if f[2] == 0xA2]
     assert len(rows) == 3
     assert rows[0][6:54] == bytes(48)
@@ -59,6 +59,60 @@ def test_bitmap_bit_order_blank_lead_and_last_row():
 def test_protocol_limits(bitmap, height, feed):
     with pytest.raises(ValueError):
         list(p.print_frames(bitmap, height, feed=feed))
+
+
+def _raster_rows(frames):
+    return [f[6:54] for f in frames if f[2] == 0xA2]
+
+
+def test_default_tail_follows_last_ink_row_before_feed_and_state_request():
+    bitmap = b"\x80" + bytes(47) + bytes(47) + b"\x01"
+    frames = list(p.print_frames(bitmap, 2))
+    rows = _raster_rows(frames)
+    assert p.DEFAULT_TAIL_ROWS == 96
+    assert len(rows) == 1 + 2 + p.DEFAULT_TAIL_ROWS  # blank lead, image, tail
+    assert rows[2][47] == 128 and all(row == bytes(48) for row in rows[3:])
+    last_row = max(i for i, f in enumerate(frames) if f[2] == 0xA2)
+    assert [f[2] for f in frames[last_row + 1 :]] == [0xBD, 0xA1, 0xA1, 0xA3]
+
+
+def test_tail_zero_disables_and_custom_length_is_exact():
+    bitmap = b"\xff" * 48
+    assert len(_raster_rows(p.print_frames(bitmap, 1, tail_rows=0))) == 2
+    assert len(_raster_rows(p.print_frames(bitmap, 1, tail_rows=7))) == 2 + 7
+    assert len(_raster_rows(p.print_frames(bitmap, 1, tail_rows=512))) == 2 + 512
+
+
+def test_existing_blank_bottom_margin_counts_toward_tail_without_double_padding():
+    bitmap = b"\xff" * 48 + bytes(48 * 40)
+    assert len(_raster_rows(p.print_frames(bitmap, 41, tail_rows=96))) == 1 + 41 + 56
+    # A margin at least as long as the tail adds nothing.
+    assert len(_raster_rows(p.print_frames(bitmap, 41, tail_rows=40))) == 1 + 41
+    assert len(_raster_rows(p.print_frames(bitmap, 41, tail_rows=10))) == 1 + 41
+
+
+def test_tail_is_not_added_twice_by_reusing_the_output_bitmap():
+    # A bitmap that already carries a full tail stays untouched.
+    bitmap = b"\xff" * 48 + bytes(48 * p.DEFAULT_TAIL_ROWS)
+    rows = _raster_rows(p.print_frames(bitmap, 1 + p.DEFAULT_TAIL_ROWS))
+    assert len(rows) == 1 + 1 + p.DEFAULT_TAIL_ROWS
+
+
+@pytest.mark.parametrize("tail", [-1, 513, 1.5])
+def test_tail_limits(tail):
+    with pytest.raises((ValueError, TypeError)):
+        list(p.print_frames(bytes(48), 1, tail_rows=tail))
+
+
+@pytest.mark.parametrize("value", [0, 96, 512, 96.0])
+def test_normalize_tail_rows_accepts_whole_rows(value):
+    assert p.normalize_tail_rows(value) == int(value)
+
+
+@pytest.mark.parametrize("value", [-1, 513, 1.5, "96", None, True])
+def test_normalize_tail_rows_rejects_the_rest(value):
+    with pytest.raises(ValueError):
+        p.normalize_tail_rows(value)
 
 
 def test_default_setup_within_documented_values():

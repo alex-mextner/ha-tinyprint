@@ -87,6 +87,21 @@ are at most 20 bytes with conservative pacing and bounded buffer-flow waits.
 The total transfer budget scales with image height (60 to 600 seconds maximum),
 so a proxy round trip is not confused with a stalled printer.
 
+## Blank tail
+
+The X6h printed the last lines of a page only partly: the A1 feed after the raster is short, so
+the final rows stayed under the head. Every job therefore ends with blank raster rows. The
+frame stream is built in one place (`print_frames`), so native BLE, the ESPHome proxy, direct
+LE and the bridge all get exactly one tail.
+
+- Option `tail_feed_lines` (Settings, Devices, TinyPrint, Configure): number of blank rows that
+  must follow the last ink row, 0 to 512 (`0` disables). Default `96` = 12 mm at 203 dpi
+  (8 rows/mm). The 64-row A1 feed that follows is unchanged.
+- Rows the document already ends with blank (a bottom margin) count toward the tail, so
+  padded labels are not padded twice.
+- With the bridge transport the value is read by the bridge from
+  `TINYPRINT_BRIDGE_TAIL_FEED_LINES` (see `docs/bridge.md`), not from the Home Assistant option.
+
 ## Optional LE print bridge (0.2.1)
 
 BlueZ connects dual-mode printers such as the X6h over BR/EDR, which fails, and the HA

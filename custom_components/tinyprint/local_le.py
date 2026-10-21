@@ -8,6 +8,7 @@ from typing import Any
 
 from . import att
 from .le_link import L2capLeLink
+from .protocol import DEFAULT_TAIL_ROWS
 from .transport import send_bitmap
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ async def run_local_job(
     link: Any = None,
     request_timeout: float = 10.0,
     pacing: dict[str, float] | None = None,
+    tail_rows: int = DEFAULT_TAIL_ROWS,
 ) -> dict[str, Any]:
     """Run under the existing printer lock. Every resource is released before return.
 
@@ -121,7 +123,7 @@ async def run_local_job(
                 profile = await att.discover_profile(client)
             gatt = att.AttGattClient(client, profile)
             printer.phase("transmitting", "printing")
-            stats = await send_bitmap(gatt, bitmap, rows, **(pacing or {}))
+            stats = await send_bitmap(gatt, bitmap, rows, tail_rows=tail_rows, **(pacing or {}))
             result.update(stats)
     finally:
         if gatt is not None:
