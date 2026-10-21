@@ -338,6 +338,31 @@ async def test_profile_mismatch_fails_before_any_write():
     assert view["delivery_uncertain"] is False
 
 
+async def test_fault_before_the_job_is_printer_fault_not_internal_error():
+    server = fake.FakeGattServer()
+    server.state_flags = 0x01
+    manager = manager_for(fake.FakeLink(server))
+    manager.start_print(print_request())
+    view = await settle(manager, "job-000001")
+    assert view["state"] == "failed" and view["error"]["code"] == "printer_fault"
+    assert "out_of_paper" not in json.dumps(view)
+    assert [v for _h, v in server.commands] == [protocol.get_state_frame()] and server.closed
+    wire.parse_job_view(view)
+
+
+async def test_fault_after_the_job_is_printer_fault_and_delivery_uncertain():
+    server = fake.FakeGattServer()
+    server.on_command = lambda srv, handle, value: (
+        setattr(srv, "state_flags", 0x02) if len(srv.commands) == 2 else None
+    )
+    manager = manager_for(fake.FakeLink(server))
+    manager.start_print(print_request())
+    view = await settle(manager, "job-000001")
+    assert view["state"] == "failed" and view["error"]["code"] == "printer_fault"
+    assert view["delivery_uncertain"] is True and view["bytes_written"] > 0
+    wire.parse_job_view(view)
+
+
 async def test_malformed_discovery_is_att_protocol_error():
     server = fake.FakeGattServer()
     server.mutators[0x10] = lambda responses: [b"\x11\x00" + bytes(6)]

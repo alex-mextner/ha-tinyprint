@@ -64,9 +64,13 @@ async def probe_printer(client: Any, wait: float = 3.0) -> list[dict[str, Any]]:
                             characteristic.uuid,
                             type(error).__name__,
                         )
-        for command in (0xA3, 0xA8, 0xBA):
-            await client.write_gatt_char(WRITE_UUID, frame(command, b"\x00"), response=False)
-            await asyncio.sleep(0.3)
+        # A device without the printer profile has no AE01 to write to; listening is still
+        # useful, but a write would raise and hide the survey the caller is after.
+        write = client.services.get_characteristic(WRITE_UUID)
+        if write is not None and "write-without-response" in write.properties:
+            for command in (0xA3, 0xA8, 0xBA):
+                await client.write_gatt_char(WRITE_UUID, frame(command, b"\x00"), response=False)
+                await asyncio.sleep(0.3)
         await asyncio.sleep(wait)
     finally:
         for characteristic in subscribed:
@@ -79,7 +83,11 @@ async def probe_printer(client: Any, wait: float = 3.0) -> list[dict[str, Any]]:
 
 
 async def _await_job_done(
-    client: Any, state_reply: asyncio.Event, conditions: Any, poll: float
+    client: Any,
+    state_reply: asyncio.Event,
+    conditions: Any,
+    poll: float,
+    stats: dict[str, Any],
 ) -> None:
     """Wait for an A3 reply without `printing`; re-ask while the printer is silent or printing.
 
@@ -96,7 +104,10 @@ async def _await_job_done(
                 return
             await asyncio.sleep(poll)
         state_reply.clear()
-        await client.write_gatt_char(WRITE_UUID, get_state_frame(), response=False)
+        poll_request = get_state_frame()
+        await client.write_gatt_char(WRITE_UUID, poll_request, response=False)
+        stats["bytes_written"] += len(poll_request)
+        stats["frames_written"] += 1
 
 
 async def send_bitmap(
@@ -220,7 +231,7 @@ async def send_bitmap(
             await client.write_gatt_char(WRITE_UUID, state_request, response=False)
             stats["bytes_written"] += len(state_request)
             stats["frames_written"] = frames_done + 1
-            await _await_job_done(client, state_reply, lambda: conditions, state_poll)
+            await _await_job_done(client, state_reply, lambda: conditions, state_poll, stats)
             if not FAULTS.isdisjoint(conditions):
                 fault = ",".join(sorted(FAULTS.intersection(conditions)))
                 _LOGGER.warning("Printer reported a fault after the job: %s", fault)

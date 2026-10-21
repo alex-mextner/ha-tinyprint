@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 _LOGGER = logging.getLogger(__name__)
 
 DISCONNECT_TIMEOUT = 5
+CONNECT_DEADLINE = 45
 
 
 async def _disconnect(client):
@@ -49,7 +50,7 @@ async def connected_client(hass, connect):
             hass.async_create_task(_close(done.result()), "TinyPrint connection cleanup")
 
     try:
-        async with asyncio.timeout(45):
+        async with asyncio.timeout(CONNECT_DEADLINE):
             client = await asyncio.shield(task)
         yield client
     finally:

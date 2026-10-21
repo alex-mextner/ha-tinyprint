@@ -245,7 +245,9 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                     "adapter_mac": source.get(
                         "adapter_mac", self._entry.data.get("adapter_mac", "")
                     ),
-                    CONF_PROXY_SOURCE: source.get(CONF_PROXY_SOURCE, ""),
+                    CONF_PROXY_SOURCE: source.get(
+                        CONF_PROXY_SOURCE, self._entry.data.get(CONF_PROXY_SOURCE, "")
+                    ),
                     CONF_BRIDGE_URL: source.get(CONF_BRIDGE_URL, ""),
                     "font_path": source.get(
                         "font_path", options.get("font_path", self._entry.data.get("font_path", ""))

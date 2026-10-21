@@ -333,6 +333,22 @@ async def test_failed_job_with_partial_write_is_uncertain(bridge):
     assert bridge.count("POST", "/v1/jobs") == 1
 
 
+async def test_printer_fault_is_reported_with_its_code_and_hint(bridge):
+    bridge.polls = [
+        {
+            "state": "failed",
+            "bytes_written": 40,
+            "delivery_uncertain": True,
+            "error": {"code": "printer_fault", "message": "The printer reported a fault"},
+        }
+    ]
+    printer, error = await run(bridge)
+    assert isinstance(error, bc.BridgeJobError)
+    assert error.code == "printer_fault"
+    assert "paper, cover and temperature" in str(error)
+    assert bridge.count("POST", "/v1/jobs") == 1
+
+
 async def test_failed_job_without_writes_says_nothing_written(bridge):
     bridge.start_state = "failed"
     bridge.polls = []

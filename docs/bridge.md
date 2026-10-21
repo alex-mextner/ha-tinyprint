@@ -174,6 +174,8 @@ journalctl --user -u tinyprint-bridge -n 100
   The diagnose job's `diagnosis.profile_problem` says what is missing.
 * `att_protocol_error`: malformed or missing ATT answers; `diagnosis.stray_pdus` counts unexpected
   PDUs.
+* `printer_fault`: the printer itself reported out of paper, an open cover or overheating; fix that
+  on the printer, then print again.
 * `link_lost`, `write_failed`, `flow_pause_timeout`, `transfer_timeout`: the job stopped part-way;
   see `delivery_uncertain` before printing again.
 * `Failed with result 'exit-code'` with status 218 or 226 in the journal: your user manager cannot
