@@ -15,15 +15,21 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from .bridge_client import BridgeJobError
 from .bridge_runtime import BridgeTransportMixin
 from .connection import connected_client
+from .const import TRANSPORT_PROXY
 from .job import run_owned_job
 from .local_le import run_local_job
 from .protocol import NOTIFY_UUID, WRITE_UUID, FrameCounter
+from .proxy_client import connect_via_proxy
 from .runtime import TinyPrintPrinter
 from .studio_render import bitmap as encode_bitmap
 from .studio_render import render_document
-from .transport import send_bitmap
+from .transport import probe_printer, send_bitmap
 
 _LOGGER = logging.getLogger(__name__)
+
+# An ESP32 proxy silently drops write-without-response packets fed at the direct-link rate
+# (177 bytes every 4 ms); 100 bytes every 20 ms is the pace that prints on an X6h through one.
+PROXY_PACING = {"packet_size": 100, "chunk_delay": 0.02}
 
 
 class TrackedClient:
@@ -140,6 +146,11 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
 
     def connection(self) -> Any:
         self.phase("connecting_gatt", "connecting")
+        if self.transport == TRANSPORT_PROXY:
+            return connected_client(
+                self.hass,
+                connect_via_proxy(self.hass, self.address, self.name, self.proxy_source),
+            )
         device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
         if device is None:
             raise HomeAssistantError(
@@ -186,7 +197,8 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
                 return dict(self.last_result)
             async with self.connection() as client:
                 self.phase("gatt_validation", "printing")
-                stats = await send_bitmap(TrackedClient(client, self), data, height)
+                pacing = PROXY_PACING if self.transport == TRANSPORT_PROXY else {}
+                stats = await send_bitmap(TrackedClient(client, self), data, height, **pacing)
                 self.last_result.update(stats)
             self.phase("sent", "sent")
             return dict(self.last_result)
@@ -264,10 +276,12 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
                     and "write-without-response" in write.properties
                     and "notify" in notify.properties
                 )
+                probe = await probe_printer(client)
             self.last_result.update(
                 {
                     "services": services,
                     "supported_profile": supported,
+                    "probe": probe,
                     "confirmation": "connection_only",
                 }
             )

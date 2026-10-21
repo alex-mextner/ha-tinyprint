@@ -19,6 +19,9 @@ Bluetooth bearer selection without a second host, HTTP bridge or token. All
 existing actions and Studio use it. See [configuration and hardware limitations](docs/local-le.md).
 A successful software test is not physical print acceptance.
 
+The opt-in `proxy` transport pins printing to one ESPHome Bluetooth proxy you name
+(see [docs/esphome-proxy.md](docs/esphome-proxy.md)).
+
 ## Install
 
 Add `https://github.com/alex-mextner/ha-tinyprint` in HACS > Custom repositories,

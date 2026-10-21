@@ -472,6 +472,8 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
             is_connected=True,
             disconnect=AsyncMock(),
             write_gatt_char=AsyncMock(),
+            start_notify=AsyncMock(),
+            stop_notify=AsyncMock(),
         )
         with (
             patch(
@@ -482,9 +484,13 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.tinyprint.studio_runtime.establish_connection",
                 new=AsyncMock(return_value=client),
             ),
+            patch("custom_components.tinyprint.transport.asyncio.sleep", new=AsyncMock()),
         ):
             result = await printer.async_diagnose()
-        client.write_gatt_char.assert_not_awaited()
+        # Only the A3 state, A8 info and BA battery queries; never a raster row (A2) or feed.
+        written = [call.args[1] for call in client.write_gatt_char.await_args_list]
+        self.assertEqual([data[2] for data in written], [0xA3, 0xA8, 0xBA])
+        self.assertEqual(result["probe"], [])
         client.disconnect.assert_awaited()
         self.assertEqual(result["confirmation"], "connection_only")
         self.assertTrue(result["supported_profile"])

@@ -21,6 +21,20 @@ PROP_WRITE = 0x08
 PROP_NOTIFY = 0x10
 PROP_INDICATE = 0x20
 
+GET_STATE = bytes.fromhex("5178a30001000000ff")
+
+
+def state_reply(flags: int = 0) -> bytes:
+    """Printer-to-host A3 frame with its own CRC-8 (poly 0x07), independent of protocol.py."""
+    payload = bytes((flags, 0, 0x27))
+    crc = 0
+    for byte in payload:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07 if crc & 0x80 else crc << 1) & 0xFF
+    return b"\x51\x78\xa3\x01\x03\x00" + payload + bytes((crc, 0xFF))
+
+
 PAUSE = bytes.fromhex("5178ae0101001070ff")
 RESUME = bytes.fromhex("5178ae0101000000ff")
 _EOF = object()
@@ -103,6 +117,7 @@ class FakeGattServer:
         self.fail_send_after_commands: int | None = None
         self.stall_commands = False
         self.reject_cccd_write: int | None = None
+        self.state_flags: int | None = 0  # A3 reply flags; None = never answer
         self._queue: asyncio.Queue = asyncio.Queue()
 
     def _build(self, services: list[Service], first: int, gap: int) -> None:
@@ -223,6 +238,8 @@ class FakeGattServer:
         self.events.append(("cmd", len(self.commands)))
         if self.on_command:
             self.on_command(self, handle, value)
+        if value == GET_STATE and self.state_flags is not None:
+            self.push_notification(self.notify_handle, state_reply(self.state_flags))
         return []
 
     def _page(self, entries: list[bytes]) -> list[bytes]:

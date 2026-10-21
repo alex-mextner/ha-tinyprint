@@ -15,7 +15,7 @@ from tinyprint_bridge import jobs
 wire = load("bridge_wire")
 protocol = load("protocol")
 
-FAST = dict(chunk_delay=0, row_delay=0, settle_delay=0, pause_timeout=0.5)
+FAST = dict(chunk_delay=0, pause_timeout=0.5)
 BITMAP = bytes(range(48)) * 2
 
 
@@ -63,13 +63,14 @@ async def test_print_runs_phases_and_reports_transport_only_success():
     assert started["state"] == "accepted" and not started["terminal"]
     assert manager.busy and manager.active_job_id == "job-000001"
     view = await settle(manager, "job-000001")
-    expected = b"".join(protocol.print_frames(BITMAP, 2))
+    job = list(protocol.print_frames(BITMAP, 2))
+    expected = protocol.get_state_frame() + b"".join(job)  # precheck, then the job
     assert view["state"] == "sent" and view["terminal"] and view["error"] is None
     assert view["confirmation"] == "transport_only"
     assert view["physical_print_confirmed"] is False
     assert view["bytes_written"] == len(expected)
     assert b"".join(v for _h, v in server.commands) == expected
-    assert view["frames_written"] == 7 and view["writes"] == len(server.commands)
+    assert view["frames_written"] == len(job) + 1 and view["writes"] == len(server.commands)
     assert view["delivery_uncertain"] is False
     assert link.connects == 1 and server.closed and not manager.busy
     wire.parse_job_view(view)  # the HA client accepts exactly this shape
@@ -377,11 +378,12 @@ async def test_total_budget_exhaustion_is_transfer_timeout():
     assert view["error"]["code"] == "transfer_timeout" and view["bytes_written"] > 0
 
 
-async def test_sent_is_not_reported_until_the_settle_delay_after_all_writes():
+async def test_sent_is_not_reported_until_the_printer_answers_the_state_request():
     server = fake.FakeGattServer()
-    manager = manager_for(fake.FakeLink(server), pacing=FAST | dict(settle_delay=0.3))
+    server.state_flags = None
+    manager = manager_for(fake.FakeLink(server), pacing=FAST | dict(precheck_timeout=0.01))
     manager.start_print(print_request())
-    expected = len(b"".join(protocol.print_frames(BITMAP, 2)))
+    expected = len(protocol.get_state_frame() + b"".join(protocol.print_frames(BITMAP, 2)))
     for _ in range(200):
         if sum(len(v) for _h, v in server.commands) == expected:
             break
@@ -389,6 +391,7 @@ async def test_sent_is_not_reported_until_the_settle_delay_after_all_writes():
     view = manager.get("job-000001")
     assert view["bytes_written"] == expected
     assert view["state"] == "transmitting" and not view["terminal"]
+    server.push_notification(server.notify_handle, fake.state_reply(0))
     final = await settle(manager, "job-000001")
     assert final["state"] == "sent"
 
