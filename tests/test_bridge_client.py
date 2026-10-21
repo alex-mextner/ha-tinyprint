@@ -499,7 +499,11 @@ async def test_diagnose_result_shape(bridge):
 
 
 async def test_deadline_scales_with_rows():
-    assert bc._deadline("print", 3) == pytest.approx(60 + bc.DEADLINE_MARGIN)
+    # The bridge's own tail length is unknown to HA: budget for the longest accepted one.
+    assert bc._deadline("print", 3) == pytest.approx(
+        bc.transfer_timeout(3 + bc.MAX_TAIL_ROWS) + bc.DEADLINE_MARGIN
+    )
+    assert bc._deadline("print", 120) >= bc.transfer_timeout(120 + 512) + bc.DEADLINE_MARGIN
     assert bc._deadline("print", 2048) > bc._deadline("print", 3)
     assert bc._deadline("diagnose", None) == bc.DIAGNOSE_DEADLINE
 

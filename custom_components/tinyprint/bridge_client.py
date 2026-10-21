@@ -29,6 +29,7 @@ import aiohttp
 
 from . import bridge_wire as wire
 from .const import CONF_BRIDGE_TOKEN, CONF_BRIDGE_URL, CONF_TRANSPORT, TRANSPORT_BRIDGE
+from .protocol import MAX_TAIL_ROWS
 from .transport import transfer_timeout
 
 _LOGGER = logging.getLogger(__name__)
@@ -374,7 +375,8 @@ async def _bounded_cancel(
 def _deadline(kind: str, rows: int | None) -> float:
     if kind == "diagnose" or rows is None:
         return DIAGNOSE_DEADLINE
-    return transfer_timeout(rows) + DEADLINE_MARGIN
+    # The bridge's tail length is its own setting, so budget for the longest one it accepts.
+    return transfer_timeout(rows + MAX_TAIL_ROWS) + DEADLINE_MARGIN
 
 
 async def _cancel_and_flag(
