@@ -9,6 +9,9 @@ from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -23,6 +26,7 @@ from .const import (
     CONF_BRIDGE_TOKEN,
     CONF_BRIDGE_URL,
     CONF_PROXY_SOURCE,
+    CONF_TAIL_FEED_LINES,
     CONF_TRANSPORT,
     DOMAIN,
     NAME,
@@ -31,7 +35,7 @@ from .const import (
     TRANSPORT_PROXY,
 )
 from .local_le import normalize_adapter_mac
-from .protocol import ADV_UUID
+from .protocol import ADV_UUID, DEFAULT_TAIL_ROWS, MAX_TAIL_ROWS, normalize_tail_rows
 
 
 def normalize_address(address: str) -> str:
@@ -158,6 +162,13 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                     TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="off")
                 ),
                 vol.Optional("font_path", default=current["font_path"]): str,
+                vol.Optional(CONF_TAIL_FEED_LINES, default=current[CONF_TAIL_FEED_LINES]): (
+                    NumberSelector(
+                        NumberSelectorConfig(
+                            min=0, max=MAX_TAIL_ROWS, step=1, mode=NumberSelectorMode.BOX
+                        )
+                    )
+                ),
                 vol.Optional(
                     "adapter_mac", description={"suggested_value": current.get("adapter_mac", "")}
                 ): str,
@@ -209,6 +220,13 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                 CONF_TRANSPORT: user_input.get(CONF_TRANSPORT, TRANSPORT_NATIVE),
                 "font_path": user_input.get("font_path", ""),
             }
+            if CONF_TAIL_FEED_LINES in user_input:
+                try:
+                    data[CONF_TAIL_FEED_LINES] = normalize_tail_rows(
+                        user_input[CONF_TAIL_FEED_LINES]
+                    )
+                except ValueError:
+                    errors[CONF_TAIL_FEED_LINES] = "invalid_tail"
             if data[CONF_TRANSPORT] not in (
                 TRANSPORT_NATIVE,
                 TRANSPORT_BRIDGE,
@@ -249,6 +267,7 @@ class TinyPrintOptionsFlow(config_entries.OptionsFlow):
                         CONF_PROXY_SOURCE, self._entry.data.get(CONF_PROXY_SOURCE, "")
                     ),
                     CONF_BRIDGE_URL: source.get(CONF_BRIDGE_URL, ""),
+                    CONF_TAIL_FEED_LINES: source.get(CONF_TAIL_FEED_LINES, DEFAULT_TAIL_ROWS),
                     "font_path": source.get(
                         "font_path", options.get("font_path", self._entry.data.get("font_path", ""))
                     ),

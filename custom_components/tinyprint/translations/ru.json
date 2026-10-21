@@ -39,14 +39,16 @@
           "bridge_token": "Токен доступа к мосту",
           "font_path": "Путь к локальному Unicode-шрифту TTF/OTF",
           "adapter_mac": "MAC локального Bluetooth-адаптера",
-          "proxy_source": "Bluetooth MAC ESPHome-прокси"
+          "proxy_source": "Bluetooth MAC ESPHome-прокси",
+          "tail_feed_lines": "Пустые строки после последней строки"
         },
         "data_description": {
           "transport": "Обычный Bluetooth поддерживает адаптеры и прокси HA. Прямой LE работает на этом Linux-хосте без home и ключа. Мост — отдельный необязательный сервер.",
           "bridge_url": "Адрес моста, например http://100.64.0.5:8765. Укажи адрес Tailscale или локальной сети, на котором слушает мост.",
           "bridge_token": "Оставь пустым, чтобы сохранить текущий токен. На хосте моста прочитай файл, указанный в TINYPRINT_BRIDGE_TOKEN_FILE в bridge.env (см. docs/bridge.md)",
           "adapter_mac": "Только для прямого LE: адрес адаптера из bluetoothctl list, не адрес принтера. Мост и ключ не нужны.",
-          "proxy_source": "Только для ESPHome-прокси: Bluetooth MAC прокси (source в диагностике интеграции Bluetooth). Печать никогда не переключается на другой адаптер."
+          "proxy_source": "Только для ESPHome-прокси: Bluetooth MAC прокси (source в диагностике интеграции Bluetooth). Печать никогда не переключается на другой адаптер.",
+          "tail_feed_lines": "Пустые растровые строки (8 на мм), которые всегда подаются после последней напечатанной строки, чтобы низ не обрезался. 0 отключает; по умолчанию 96 (12 мм). С мостом TinyPrint задайте TINYPRINT_BRIDGE_TAIL_FEED_LINES на самом мосту."
         }
       }
     },
@@ -58,7 +60,8 @@
       "invalid_auth": "Мост отклонил токен доступа",
       "invalid_adapter": "Укажите корректный ненулевой MAC локального Bluetooth-адаптера.",
       "invalid_proxy": "Укажите Bluetooth MAC ESPHome-прокси, например AA:BB:CC:DD:EE:FF.",
-      "invalid_transport": "Выберите поддерживаемый способ подключения."
+      "invalid_transport": "Выберите поддерживаемый способ подключения.",
+      "invalid_tail": "Введите целое число строк от 0 до 512."
     }
   },
   "entity": {

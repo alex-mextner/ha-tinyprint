@@ -76,6 +76,18 @@ async def test_print_runs_phases_and_reports_transport_only_success():
     wire.parse_job_view(view)  # the HA client accepts exactly this shape
 
 
+@pytest.mark.parametrize("tail", [0, 10])
+async def test_print_uses_the_configured_blank_tail(tail):
+    server = fake.FakeGattServer()
+    manager = manager_for(fake.FakeLink(server), tail_rows=tail)
+    manager.start_print(print_request())
+    await settle(manager, "job-000001")
+    expected = protocol.get_state_frame() + b"".join(
+        protocol.print_frames(BITMAP, 2, tail_rows=tail)
+    )
+    assert b"".join(v for _h, v in server.commands) == expected
+
+
 async def test_diagnose_reports_profile_without_printing():
     server = fake.FakeGattServer(first_handle=11, gap=1)
     manager = manager_for(fake.FakeLink(server))

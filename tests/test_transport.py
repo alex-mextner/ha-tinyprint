@@ -258,6 +258,26 @@ def test_state_poll_writes_are_counted_so_stats_match_the_wire():
     asyncio.run(check())
 
 
+def _raster_writes(client):
+    stream = b"".join(client.writes)
+    return stream.count(b"\x51\x78\xa2")
+
+
+def test_every_job_writes_the_blank_tail_once_and_zero_disables_it():
+    async def check():
+        default = FakeClient()
+        await t.send_bitmap(default, b"\xff" * 48, 1, **KW)
+        off = FakeClient()
+        await t.send_bitmap(off, b"\xff" * 48, 1, **KW | dict(tail_rows=0))
+        short = FakeClient()
+        await t.send_bitmap(short, b"\xff" * 48, 1, **KW | dict(tail_rows=5))
+        assert _raster_writes(default) == 1 + 1 + 96  # blank lead, ink row, tail
+        assert _raster_writes(off) == 2
+        assert _raster_writes(short) == 2 + 5
+
+    asyncio.run(check())
+
+
 class NoProfileClient:
     """A connectable device that exposes a notifying characteristic but no AE01/AE02."""
 

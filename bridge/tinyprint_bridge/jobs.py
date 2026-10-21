@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ._shared import att, bridge_wire, transport
+from ._shared import att, bridge_wire, protocol, transport
 from .link import LinkFactory
 
 _LOGGER = logging.getLogger(__name__)
@@ -117,6 +117,7 @@ class JobManager:
         request_timeout: float = 10,
         send_timeout: float = 5,
         pacing: dict[str, float] | None = None,
+        tail_rows: int = protocol.DEFAULT_TAIL_ROWS,
     ) -> None:
         self._link = link
         self._max_retained = max_retained
@@ -127,6 +128,7 @@ class JobManager:
         self._request_timeout = request_timeout
         self._send_timeout = send_timeout
         self._pacing = dict(pacing or {})
+        self._tail_rows = tail_rows
         self._jobs: OrderedDict[str, _Job] = OrderedDict()
         self._seen: OrderedDict[str, None] = OrderedDict()
         # Ids cancelled before they were ever started live apart from `_seen`, so that blind
@@ -321,7 +323,10 @@ class JobManager:
             job.gatt = gatt
             job.live = gatt.counters
             self._set_state(job, "transmitting")
-            options = {"total_timeout": transport.transfer_timeout(request.rows)} | self._pacing
+            options = {
+                "total_timeout": transport.transfer_timeout(request.rows + self._tail_rows),
+                "tail_rows": self._tail_rows,
+            } | self._pacing
             await transport.send_bitmap(gatt, request.bitmap, request.rows, **options)
         finally:
             await self._release(channel, client)

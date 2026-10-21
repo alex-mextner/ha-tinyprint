@@ -12,7 +12,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
 from .bridge_client import BridgeConfigError, bridge_settings
-from .const import CONF_PROXY_SOURCE, DOMAIN, TRANSPORT_PROXY
+from .const import CONF_PROXY_SOURCE, CONF_TAIL_FEED_LINES, DOMAIN, TRANSPORT_PROXY
+from .protocol import DEFAULT_TAIL_ROWS, normalize_tail_rows
 from .studio import async_register_studio_services, async_setup_panel
 from .studio_runtime import StudioPrinter as TinyPrintPrinter
 
@@ -109,6 +110,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if effective.get("transport") == TRANSPORT_PROXY
         else None
     )
+    try:
+        tail_rows = normalize_tail_rows(effective.get(CONF_TAIL_FEED_LINES, DEFAULT_TAIL_ROWS))
+    except ValueError:
+        tail_rows = DEFAULT_TAIL_ROWS
+        _LOGGER.warning("Invalid tail_feed_lines option; using %s rows", DEFAULT_TAIL_ROWS)
     runtime = TinyPrintPrinter(
         hass,
         entry.entry_id,
@@ -119,6 +125,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bridge_error=bridge_error,
         local_adapter=local_adapter,
         proxy_source=proxy_source,
+        tail_rows=tail_rows,
     )
     hass.data[DOMAIN][entry.entry_id] = runtime
     try:

@@ -66,6 +66,7 @@ To keep the user service running when you are logged out: `loginctl enable-linge
 | `TINYPRINT_BRIDGE_TOKEN` | Alternative to the file (visible in the process environment; prefer the file). |
 | `TINYPRINT_BRIDGE_BIND` | IP address to listen on. Default `127.0.0.1`. Hostnames are refused. |
 | `TINYPRINT_BRIDGE_PORT` | Default `8765`. |
+| `TINYPRINT_BRIDGE_TAIL_FEED_LINES` | Blank rows kept after the last ink row of every job (0-512, `0` disables). Default `96` (12 mm). See the README section "Blank tail". |
 
 `--bind`/`--port` flags override the environment. The bridge refuses to start (exit code 2, with
 an actionable message that never contains the token) when a MAC is missing or malformed, the token

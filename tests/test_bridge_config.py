@@ -32,6 +32,17 @@ def test_valid_config_with_defaults(tmp_path):
     assert TOKEN not in repr(loaded)
 
 
+def test_tail_rows_default_override_and_validation(tmp_path):
+    assert config.load_config(env(tmp_path)).tail_rows == 96
+    assert config.load_config(env(tmp_path, TINYPRINT_BRIDGE_TAIL_FEED_LINES="0")).tail_rows == 0
+    assert (
+        config.load_config(env(tmp_path, TINYPRINT_BRIDGE_TAIL_FEED_LINES="512")).tail_rows == 512
+    )
+    for bad in ("-1", "513", "many", "1.5", ""):
+        with pytest.raises(config.ConfigError, match="TINYPRINT_BRIDGE_TAIL_FEED_LINES"):
+            config.load_config(env(tmp_path, TINYPRINT_BRIDGE_TAIL_FEED_LINES=bad))
+
+
 def test_environment_overrides_and_cli_flags_win(tmp_path):
     values = env(tmp_path, TINYPRINT_BRIDGE_BIND="100.64.0.7", TINYPRINT_BRIDGE_PORT="9000")
     loaded = config.load_config(values)

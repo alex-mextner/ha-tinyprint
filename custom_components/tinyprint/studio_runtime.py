@@ -188,7 +188,9 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
                 raise
             if self.transport == "local_le":
                 self.phase("local_config", "connecting")
-                self.last_result.update(await run_local_job(self, "print", data, height))
+                self.last_result.update(
+                    await run_local_job(self, "print", data, height, tail_rows=self.tail_rows)
+                )
                 self.phase("sent", "sent")
                 return dict(self.last_result)
             if self.transport == "bridge":
@@ -198,7 +200,9 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
             async with self.connection() as client:
                 self.phase("gatt_validation", "printing")
                 pacing = PROXY_PACING if self.transport == TRANSPORT_PROXY else {}
-                stats = await send_bitmap(TrackedClient(client, self), data, height, **pacing)
+                stats = await send_bitmap(
+                    TrackedClient(client, self), data, height, tail_rows=self.tail_rows, **pacing
+                )
                 self.last_result.update(stats)
             self.phase("sent", "sent")
             return dict(self.last_result)

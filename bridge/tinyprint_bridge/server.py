@@ -155,7 +155,9 @@ async def serve(
     stop: asyncio.Event | None = None,
 ) -> None:
     """Run until `stop` is set (SIGTERM/SIGINT when not supplied), then shut down bounded."""
-    manager = manager or JobManager(L2capLeLink(config.adapter_mac, config.printer_mac))
+    manager = manager or JobManager(
+        L2capLeLink(config.adapter_mac, config.printer_mac), tail_rows=config.tail_rows
+    )
     loop = asyncio.get_running_loop()
     handlers = stop is None
     stop = stop or asyncio.Event()
