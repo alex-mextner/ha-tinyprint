@@ -246,8 +246,8 @@ async def main():
             panel.printers[0].visible = true;
             panel.deviceStatus();
         }""")
-        assert await status.inner_text() == "Локальный LE · принтер виден"
-        assert await page.locator("#diagnose").inner_text() == "Проверить локальный LE"
+        assert await status.inner_text() == "Принтер обнаружен"
+        assert await page.locator("#diagnose").inner_text() == "Проверить подключение"
         await page.screenshot(path=str(out / "local-le-panel.png"), full_page=True)
         checks.append("direct local LE names this host, without a bridge or key")
         assert not errors, errors
