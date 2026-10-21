@@ -12,9 +12,11 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from homeassistant.components import bluetooth
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from .bridge_client import BridgeJobError
+from .bridge_runtime import BridgeTransportMixin
 from .connection import connected_client
 from .job import run_owned_job
-from .protocol import NOTIFY_UUID, WRITE_UUID
+from .protocol import NOTIFY_UUID, WRITE_UUID, FrameCounter
 from .runtime import TinyPrintPrinter
 from .studio_render import bitmap as encode_bitmap
 from .studio_render import render_document
@@ -33,7 +35,7 @@ class TrackedClient:
     def __init__(self, client: Any, printer: Any) -> None:
         self.client = client
         self.printer = printer
-        self.pending = bytearray()
+        self.frames = FrameCounter()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.client, name)
@@ -57,19 +59,7 @@ class TrackedClient:
         stats = self.printer.last_result
         stats["bytes_written"] += len(data)
         stats["writes"] += 1
-        self.pending.extend(data)
-        while len(self.pending) >= 6:
-            if self.pending[:2] != b"\x51\x78":
-                self.pending.clear()
-                break
-            length = int.from_bytes(self.pending[4:6], "little") + 8
-            if length > 520:
-                self.pending.clear()
-                break
-            if len(self.pending) < length:
-                break
-            stats["frames_written"] += 1
-            del self.pending[:length]
+        stats["frames_written"] += self.frames.feed(data)
         if stats["writes"] % 100 == 0:
             _LOGGER.debug(
                 "TinyPrint job=%s phase=transmitting bytes=%s frames=%s writes=%s",
@@ -80,7 +70,7 @@ class TrackedClient:
             )
 
 
-class StudioPrinter(TinyPrintPrinter):
+class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
     """Preserve existing print API/locking, add studio rendering and diagnostics."""
 
     def begin(self) -> None:
@@ -171,6 +161,7 @@ class StudioPrinter(TinyPrintPrinter):
         self.begin()
         self.phase("rendering", "rendering")
         try:
+            self._require_bridge()
             render = self.hass.async_add_executor_job(self._render, kind, payload, font_size)
             try:
                 data, height = await asyncio.shield(render)
@@ -183,6 +174,10 @@ class StudioPrinter(TinyPrintPrinter):
                 if not render.cancelled():
                     render.exception()
                 raise
+            if self.transport == "bridge":
+                await self._run_bridge_job("print", data, height)
+                self.phase("sent", "sent")
+                return dict(self.last_result)
             async with self.connection() as client:
                 self.phase("gatt_validation", "printing")
                 stats = await send_bitmap(TrackedClient(client, self), data, height)
@@ -196,6 +191,10 @@ class StudioPrinter(TinyPrintPrinter):
             # Already user-facing (e.g. printer not visible); keep the actionable text.
             self.failed(error)
             raise
+        except BridgeJobError as error:
+            self.last_result["bridge_error"] = error.code
+            self.failed(error)
+            raise HomeAssistantError(str(error)) from None
         except Exception as error:
             failure_phase = self.last_result["phase"]
             self.failed(error)
@@ -227,6 +226,11 @@ class StudioPrinter(TinyPrintPrinter):
     async def _diagnose(self) -> dict[str, Any]:
         self.begin()
         try:
+            self._require_bridge()
+            if self.transport == "bridge":
+                await self._run_bridge_job("diagnose")
+                self.phase("diagnosed", "idle")
+                return dict(self.last_result)
             async with self.connection() as client:
                 services = []
                 for service in client.services:
@@ -265,6 +269,10 @@ class StudioPrinter(TinyPrintPrinter):
             # Already user-facing (e.g. printer not visible); keep the actionable text.
             self.failed(error)
             raise
+        except BridgeJobError as error:
+            self.last_result["bridge_error"] = error.code
+            self.failed(error)
+            raise HomeAssistantError(str(error)) from None
         except Exception as error:
             self.failed(error)
             raise HomeAssistantError(
