@@ -97,7 +97,9 @@ def test_late_reply_after_silence_completes_the_job():
                 client.callback(None, state_reply(0))
 
         client.write_gatt_char = answer_second_request
-        stats = await t.send_bitmap(client, bytes(48), 1, **KW | dict(state_poll=0.01, total_timeout=1))
+        stats = await t.send_bitmap(
+            client, bytes(48), 1, **KW | dict(state_poll=0.01, total_timeout=1)
+        )
         assert stats["printer_done"] is True
 
     asyncio.run(check())
@@ -115,7 +117,9 @@ def test_link_is_held_while_the_printer_reports_printing():
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("flags,fault", [(0x01, "out_of_paper"), (0x02, "cover_open"), (0x04, "overheating")])
+@pytest.mark.parametrize(
+    "flags,fault", [(0x01, "out_of_paper"), (0x02, "cover_open"), (0x04, "overheating")]
+)
 def test_printer_fault_is_raised_not_reported_as_sent(flags, fault):
     async def check():
         client = FakeClient(replies=(0, flags))

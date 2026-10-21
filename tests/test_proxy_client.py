@@ -30,9 +30,14 @@ def scanner_device(source: str, client_factory: MagicMock | None):
 class ProxyClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_connects_through_requested_source_only(self):
         local, proxy = MagicMock(), MagicMock()
-        devices = [scanner_device("00:11:22:33:44:55", local), scanner_device("AA:BB:CC:DD:EE:FF", proxy)]
+        devices = [
+            scanner_device("00:11:22:33:44:55", local),
+            scanner_device("AA:BB:CC:DD:EE:FF", proxy),
+        ]
         with (
-            patch.object(proxy_client.bluetooth, "async_scanner_devices_by_address", return_value=devices),
+            patch.object(
+                proxy_client.bluetooth, "async_scanner_devices_by_address", return_value=devices
+            ),
             patch.object(proxy_client, "BleakClient") as bleak,
         ):
             bleak.return_value.connect = AsyncMock()
@@ -46,7 +51,9 @@ class ProxyClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_proxy_fails_without_fallback(self):
         devices = [scanner_device("00:11:22:33:44:55", MagicMock())]
         with (
-            patch.object(proxy_client.bluetooth, "async_scanner_devices_by_address", return_value=devices),
+            patch.object(
+                proxy_client.bluetooth, "async_scanner_devices_by_address", return_value=devices
+            ),
             patch.object(proxy_client, "BleakClient") as bleak,
         ):
             with self.assertRaises(HomeAssistantError):
@@ -58,7 +65,9 @@ class ProxyClientTests(unittest.IsolatedAsyncioTestCase):
 
         devices = [scanner_device("AA:BB:CC:DD:EE:FF", MagicMock())]
         with (
-            patch.object(proxy_client.bluetooth, "async_scanner_devices_by_address", return_value=devices),
+            patch.object(
+                proxy_client.bluetooth, "async_scanner_devices_by_address", return_value=devices
+            ),
             patch.object(proxy_client, "BleakClient") as bleak,
             patch.object(proxy_client, "RETRY_DELAY", 0),
         ):
@@ -113,9 +122,7 @@ class ProxyConfigTests(unittest.IsolatedAsyncioTestCase):
     async def test_options_store_normalized_proxy_and_reject_bad_mac(self):
         flow = TinyPrintOptionsFlow(self.entry())
         flow.hass = self.hass
-        result = await flow.async_step_init(
-            {"transport": "proxy", "proxy_source": PROXY.lower()}
-        )
+        result = await flow.async_step_init({"transport": "proxy", "proxy_source": PROXY.lower()})
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"]["proxy_source"], PROXY)
         bad = await flow.async_step_init({"transport": "proxy", "proxy_source": "bad"})

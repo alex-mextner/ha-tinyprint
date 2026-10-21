@@ -24,7 +24,7 @@ from aiohttp.test_utils import TestServer
 from custom_components.tinyprint import async_setup
 from custom_components.tinyprint import bridge_client as bc
 from custom_components.tinyprint.const import DOMAIN
-from custom_components.tinyprint.protocol import print_frames
+from custom_components.tinyprint.protocol import get_state_frame, print_frames
 from custom_components.tinyprint.studio_runtime import StudioPrinter
 
 TOKEN = "E2e-" + "k" * 44
@@ -97,7 +97,8 @@ class EndToEndTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.printer, "_render", return_value=(BITMAP, 3)):
             result = await self.printer.async_print("text", "hello")
         sent = b"".join(value for _handle, value in self.gatt.commands)
-        self.assertEqual(sent, b"".join(print_frames(BITMAP, 3)))
+        # The wire carries a state precheck, then the job whose last frame is the state request.
+        self.assertEqual(sent, get_state_frame() + b"".join(print_frames(BITMAP, 3)))
         self.assertTrue(all(len(value) <= 20 for _handle, value in self.gatt.commands))
         self.assertEqual(result["bytes_written"], len(sent))
         self.assertEqual(result["confirmation"], "transport_only")

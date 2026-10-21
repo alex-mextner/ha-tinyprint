@@ -60,7 +60,9 @@ async def probe_printer(client: Any, wait: float = 3.0) -> list[dict[str, Any]]:
                         subscribed.append(characteristic)
                     except Exception as error:
                         _LOGGER.debug(
-                            "Probe subscribe %s failed: %s", characteristic.uuid, type(error).__name__
+                            "Probe subscribe %s failed: %s",
+                            characteristic.uuid,
+                            type(error).__name__,
                         )
         for command in (0xA3, 0xA8, 0xBA):
             await client.write_gatt_char(WRITE_UUID, frame(command, b"\x00"), response=False)
