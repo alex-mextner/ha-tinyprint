@@ -12,18 +12,18 @@
 
 ## Global Constraints
 
-- Store: `homeassistant.helpers.storage.Store`, key `tinyprint.history`, version 1, created once per `hass` in `async_setup`, never recreated on entry reload; `async_delay_save` with a 30 s delay; `data_func` returns a snapshot of immutable entries; `Store(..., serialize_in_event_loop=False)`. In HA 2026.9.3 that flag means `data_func` itself runs in a separate thread, so it must only read an already-built immutable snapshot.
-- One domain-level `HistoryStore`, loaded before any print service or button is usable. All mutations run on the event loop. It is NOT stored under `hass.data["tinyprint"]` (tests assert that dict is empty and it maps entry ids to printers); use `hass.data["tinyprint_history"]`.
-- Ring caps: 200 entries and 5 MiB of serialised data (entries plus blobs); sizes computed once at insert, running total kept; the byte cap takes precedence. Each bitmap (`bitmap_z`, `thumb`) is stored once, keyed by `bitmap_sha256`, dropped with its last referencing entry.
+Exact values below; the rest is in the spec section "Print history". Line numbers in tasks are hints as of commit 28e8940: find code by symbol.
+
+- Commands used by every task: `TESTS` = the exact `python -m pytest ...` file list of the `tests` job in `.github/workflows/validate.yml`; `HA_TESTS <pattern>` = `docker run --rm --entrypoint /bin/sh -v "$PWD:/workspace" -w /workspace ghcr.io/home-assistant/home-assistant:2026.9.3 -c 'python -m pip install --target /tmp/test-deps --no-deps qrcode==8.2 && PYTHONPATH=/workspace:/workspace/bridge:/tmp/test-deps python -m unittest discover -s tests -p "<pattern>" -v'`; `LINT` = `ruff check . && ruff format --check .`. CI: the `tests` job runs an explicit file list WITHOUT Home Assistant or voluptuous (so `history.py` imports neither); `home-assistant` job picks up new `test_ha_*.py` automatically; `browser` job runs `python tests/browser_studio.py`.
+- Store: `homeassistant.helpers.storage.Store`, key `tinyprint.history`, version 1, `serialize_in_event_loop=False` (in HA 2026.9.3 `data_func` then runs in a separate thread: it only returns an already-built immutable snapshot), `async_delay_save` 30 s. Created once per `hass` in `async_setup`, never recreated on entry reload; loaded before any print service or button is usable; mutations on the event loop. Kept at `hass.data["tinyprint_history"]`, NOT under `hass.data["tinyprint"]` (tests assert that dict is empty and it maps entry ids to printers).
+- Ring caps: 200 entries and 5 MiB serialised (entries plus blobs), sizes computed once at insert, byte cap wins. Each bitmap (`bitmap_z`, `thumb`) is stored once by `bitmap_sha256` and dropped with its last entry.
 - Entry fields: `id` (`uuid4().hex`, validated on every input), `created` (UTC ISO-8601), `device_id`, `source` (`service`|`studio`|`button`|`history`), `status` (`sent`|`failed`|`delivery_uncertain`|`cancelled`), `phase`, `rows`, `ink_percent`, `bitmap_sha256`, `recipe`, `title` (at most 80 chars), `job_id`, `timings` (object or null). `bitmap_z` = zlib + base64 of the packed bitmap; `thumb` = base64 PNG at most 96 dots wide, made inline in the job task.
-- Status precedence (one boundary, the "first raster write call"): no raster write and cancelled is `cancelled`; no raster write otherwise is `failed`; any failure, cancel or fault after the first raster write call is `delivery_uncertain`; `sent` when the job ended successfully. On the bridge path `delivery_uncertain` itself counts as "raster started" (a lost answer to the start request leaves `bytes_written` at 0 while the bridge may be printing; spec amended accordingly). A job from a legacy (`print_text`, `print_qr`, `print_image`; `source` `service`) action that failed or was cancelled before the first raster write is NOT recorded. Failures before it from `print_bitmap`, `print_document`/`print_template`, reprints and the button are recorded.
+- Status: one boundary, the first raster write call. No raster write: `cancelled` if cancelled, else `failed`. Any failure, cancel or fault after it: `delivery_uncertain`. Success: `sent`. On the bridge path `delivery_uncertain` itself counts as raster started (a lost answer to the start request leaves `bytes_written` 0 while the bridge may be printing; spec amended). A failed or cancelled-before-raster job from a legacy action (`print_text`, `print_qr`, `print_image`, `source` `service`) is NOT recorded; the same from `print_bitmap`, `print_document`/`print_template`, reprints and the button is.
 - A history write failure is logged without payload and never changes the job result. Logs and diagnostics stay payload-free.
-- `print_bitmap` new optional fields: `recipe` (JSON object, at most 64 KiB, never interpreted by the server), `title` (at most 80 chars), `source` (`studio`|`service`, default `service`). `recipe` is built by the server through the shared `normalize_options` for text, template and QR actions, with fully resolved options and `v: 1`; by the panel for Studio; `null` for images and recipe-less `print_bitmap` calls.
-- Admin-only services via `async_register_admin_service`: `history_list` (`limit` default 50, `offset`; response only), `history_get` (response only), `history_delete`, `history_clear`, `history_reprint` (`device_id`, `id`). `history_reprint` decompresses with an output bound of `2048 * 48 + 1` bytes and re-validates rows and decoded length through `bitmap.py` before any radio activity; it never re-renders.
-- Panel: every history field is written with `textContent` or property assignment, never `innerHTML`; `thumb` is used only if it matches `^[A-Za-z0-9+/=]+$` and goes into a `data:image/png;base64,` URL built by the panel. Reprint of a `delivery_uncertain` entry warns that the first copy may have printed.
-- Privacy documentation must state: content persists in `/config/.storage/tinyprint.history` and HA backups; `call_service` events carry the full `service_data` into the recorder, which drops event data above 32768 bytes with a logged error (small `print_bitmap` calls, roughly 500 rows or fewer, are stored; larger ones are not, at the cost of an error log line); the `recorder: exclude: event_types: [call_service]` snippet; `history_clear` does not purge backups or recorder rows; history of a removed printer is not deleted automatically; non-admin users can create entries through the legacy actions and can evict older ones (accepted).
-- CI facts: the `tests` job runs an EXPLICIT pytest file list without Home Assistant or voluptuous installed (Pillow 12.3.0, qrcode 8.2, aiohttp only), so `history.py` must import neither; the `home-assistant` job runs `tests/test_ha*.py` with `unittest` discover in the 2026.9.3 image (new `test_ha_*.py` files are picked up automatically); the `browser` job runs `python tests/browser_studio.py`; also `ruff check . && ruff format --check .`, hassfest, HACS.
-- Version at start of this plan: 0.3.0 (Plan 1). This plan ends at 0.3.1.
+- `print_bitmap` new optional fields: `recipe` (JSON object, at most 64 KiB, never interpreted by the server), `title` (at most 80 chars), `source` (`studio`|`service`, default `service`). The server builds `recipe` through `normalize_options` (fully resolved options, `v: 1`) for text, template and QR; the panel builds it for Studio; `null` for images and recipe-less `print_bitmap`.
+- Five admin services (`async_register_admin_service`): `history_list`, `history_get`, `history_delete`, `history_clear`, `history_reprint`. Reprint decompresses with an output bound of `2048 * 48 + 1` bytes and re-validates rows and decoded length through `bitmap.py` before any radio activity; it never re-renders.
+- Privacy docs (Task 10) must state: content persists in `/config/.storage/tinyprint.history` and HA backups; `call_service` events carry the full `service_data` into the recorder, which drops event data above 32768 bytes with a logged error (`print_bitmap` calls of roughly 500 rows or fewer are stored, larger ones are not); the `recorder: exclude: event_types: [call_service]` snippet; `history_clear` does not purge backups or recorder rows; history of a removed printer is not deleted automatically; non-admin users can create entries through the legacy actions and evict older ones (accepted).
+- Version: 0.3.0 at start, 0.3.1 at end.
 
 ## Review Focus
 
@@ -32,22 +32,6 @@
 3. Reprint of an entry whose printer device is unknown or not loaded, and reprint while another job runs: a clear error, nothing printed, no new entry for an unknown device (Task 8).
 4. Hostile or awkward titles: newlines, very long text, markup, RTL marks. The stored title is one line, at most 80 characters; markup stays inert text everywhere (Tasks 3, 9).
 5. History storage failing (store raises, disk full): the print result, `last_result` and the sensor state are unchanged and the log line carries no label text (Task 5).
-
----
-
-## File Structure
-
-| File | Responsibility |
-| --- | --- |
-| `custom_components/tinyprint/transport.py` | `send_bitmap(progress=...)` flags the first raster write (Task 1) |
-| `custom_components/tinyprint/studio_render.py` | add `ink_percent`, `thumbnail_png` (Task 2) |
-| `custom_components/tinyprint/history.py` (new) | pure: `HistoryRing`, `job_status`, `title_for`, `recipe_for`, `check_recipe`, `pack_bitmap`, `unpack_bitmap`, `summary`, `detail` (Task 3) |
-| `custom_components/tinyprint/history_store.py` (new) | `HistoryStore` over `Store`, `async_setup_history`, `HISTORY_KEY` (Task 4) |
-| `custom_components/tinyprint/studio_runtime.py` | `async_print(source=)`, recording wrapper, `history=` ctor kwarg (Tasks 1, 5) |
-| `custom_components/tinyprint/studio.py` | `print_bitmap` optional fields (Task 6); calls history service registration |
-| `custom_components/tinyprint/studio_history.py` (new) | the five admin services (Tasks 7, 8) |
-| `frontend/studio/history.js`, `frontend/studio/title.js` (new), `frontend/tinyprint-panel.js` | drawer, title derivation, `setDocument` (Task 9) |
-| `tests/test_history.py` (new), `tests/test_ha_history.py` (new), `tests/browser_studio.py` | tests |
 
 ---
 
@@ -91,24 +75,12 @@ def test_successful_send_reports_raster_started_in_stats():
 In `tests/test_local_le.py` (models: the failing-at-discovery test near `:75-80` and the failing-write test near `:91-100`): `test_raster_started_false_when_the_link_fails_before_any_write` asserts `p.last_result["raster_started"] is False`; `test_raster_started_true_when_a_stream_write_fails` asserts `True`.
 In `tests/test_bridge_client.py` (use its scripted fake bridge; `run(bridge)` returns the printer and the result or error): `test_raster_started_is_derived_from_bytes_beyond_the_state_request` with terminal views whose `bytes_written` is `0`, `9` (state request only) and `10`: expected `False`, `False`, `True`, on both a sent and a failed job (a `sent` view with `0` bytes is rejected as `bridge_bad_response` with `delivery_uncertain`, so its expected value is `True`). `test_a_lost_start_answer_counts_as_raster_started`: the start request fails with `BridgeError("bridge_timeout", uncertain=True)` (use the code `test_timeout_after_send_is_uncertain` produces) and the follow-up state read reports `bytes_written` 0 -> `last_result["delivery_uncertain"] is True` and `last_result["raster_started"] is True`. `test_a_start_refused_before_any_send_is_not_raster_started`: a non-uncertain start error (see `test_start_error_classification`) -> `raster_started is False`. `test_raster_started_is_set_when_the_job_is_cancelled`: `CancelledError` during polling with `bytes_written` 0 and a cancel the bridge does not acknowledge -> `True`; acknowledged -> `False`.
 
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `python -m pytest tests/test_transport.py tests/test_local_le.py tests/test_bridge_client.py -q`
-Expected: FAIL (`TypeError: unexpected keyword argument 'progress'`, `KeyError: 'raster_started'`). The `TypeError` is an acceptable red for the transport tests; the local and bridge tests must fail on the missing key.
+- [ ] **Step 2: Run to verify they fail:** `TESTS` restricted to the three files. Expected: FAIL (`TypeError: unexpected keyword argument 'progress'`, `KeyError: 'raster_started'`); the `TypeError` is an acceptable red for the transport tests, the local and bridge tests must fail on the missing key.
 
 - [ ] **Step 3: Implement** the Interfaces block above in the four files. In `send_bitmap` set the flag on the line before `await client.write_gatt_char(WRITE_UUID, chunk, response=False)` in the packet loop.
 
-- [ ] **Step 4: Run the full `tests` job list**
-
-Run: the exact `python -m pytest ...` list from `.github/workflows/validate.yml` (`tests` job), then `ruff check . && ruff format --check .`
-Expected: all pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint tests
-git commit -m "feat: expose the first raster write as last_result.raster_started (Refs #25)"
-```
+- [ ] **Step 4: Run** `TESTS` and `LINT`. Expected: all pass.
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint tests && git commit -m "feat: expose the first raster write as last_result.raster_started (Refs #25)"`
 
 ---
 
@@ -140,13 +112,8 @@ def test_thumbnail_of_a_tall_bitmap_keeps_the_aspect_ratio():
 ```
 - [ ] **Step 2:** `python -m pytest tests/test_studio_render.py -q` — expected FAIL (`ImportError`).
 - [ ] **Step 3: Implement** both functions: `Image.frombytes("1", (384, rows), data.translate(_INVERT))` (the module's existing ink-inversion table), `.convert("L").reduce(4)`, `save(format="PNG", optimize=True)`.
-- [ ] **Step 4:** same command — expected PASS; `ruff check . && ruff format --check .`
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint/studio_render.py tests/test_studio_render.py
-git commit -m "feat: ink percent and thumbnail helpers for history (Refs #25)"
-```
+- [ ] **Step 4:** same command, expected PASS; `LINT`.
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint/studio_render.py tests/test_studio_render.py && git commit -m "feat: ink percent and thumbnail helpers for history (Refs #25)"`
 
 ---
 
@@ -207,24 +174,10 @@ Algorithms the tests do not determine: `add` appends the entry, increments its b
   - `test_check_recipe_boundary`: a dict whose compact JSON is exactly `64 * 1024` bytes passes, one byte more raises `ValueError`; a list, a str and `None` raise.
   - `test_unpack_round_trips_and_rejects_bad_blobs`: round trip returns `(rows, data)`; each of these raises `HistoryError`: `rows=True`, `rows=2049`, `rows` not matching the decoded length, a `zlib.compress(bytes(98305))` blob (oversized output), valid blob plus trailing bytes, invalid base64 (`"!!!"`), one flipped bit in the decompressed data (sha mismatch), `blob=None`.
 
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `python -m pytest tests/test_history.py -q`
-Expected: FAIL (`ModuleNotFoundError: ... history`).
-
-- [ ] **Step 3: Implement `history.py`** to the Interfaces block. Add `tests/test_history.py` to the pytest file list in the `tests` job of `.github/workflows/validate.yml`.
-
-- [ ] **Step 4: Run to verify they pass**
-
-Run: `python -m pytest tests/test_history.py -q && ruff check . && ruff format --check .`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint/history.py tests/test_history.py .github/workflows/validate.yml
-git commit -m "feat: pure print history ring with deduplicated blobs (Refs #25)"
-```
+- [ ] **Step 2: Run to verify they fail:** `python -m pytest tests/test_history.py -q`. Expected: FAIL (`ModuleNotFoundError: ... history`).
+- [ ] **Step 3: Implement `history.py`** to the Interfaces block; append `tests/test_history.py` to the `tests` job file list in `.github/workflows/validate.yml`.
+- [ ] **Step 4: Run:** `python -m pytest tests/test_history.py -q && ruff check . && ruff format --check .`. Expected: PASS.
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint/history.py tests/test_history.py .github/workflows/validate.yml && git commit -m "feat: pure print history ring with deduplicated blobs (Refs #25)"`
 
 ---
 
@@ -263,24 +216,10 @@ async def async_setup_history(hass: HomeAssistant) -> HistoryStore   # idempoten
   - `test_a_repeated_bitmap_adds_no_blob_bytes`: record the same bytes twice; the second record grows `ring.total_bytes` by exactly the entry size.
   - `test_delete_and_clear_save_immediately`: `async_delay_save` is called with delay `0`.
 
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `docker run --rm --entrypoint /bin/sh -v "$PWD:/workspace" -w /workspace ghcr.io/home-assistant/home-assistant:2026.9.3 -c 'python -m pip install --target /tmp/test-deps --no-deps qrcode==8.2 && PYTHONPATH=/workspace:/workspace/bridge:/tmp/test-deps python -m unittest discover -s tests -p "test_ha_history.py" -v'`
-Expected: FAIL (`ModuleNotFoundError: ... history_store`). Covered in CI by the `home-assistant` job (no workflow change needed).
-
-- [ ] **Step 3: Implement** `history_store.py`; in `async_register_studio_services` (after the `DATA_KEY` guard, before `async_register_admin_service` calls) `await async_setup_history(hass)`; in `async_setup_entry` pass `history=hass.data[HISTORY_KEY]`.
-
-- [ ] **Step 4: Run to verify they pass**
-
-Run: the Step 2 command, then the `tests/test_ha*.py` run for regressions: same command with `-p "test_ha*.py"`.
-Expected: PASS. (`async_setup_entry` will fail on the unknown `history` kwarg until Task 5; if the full discovery run is red only for that reason, make Task 5's constructor kwarg land in the same commit.)
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint tests/test_ha_history.py
-git commit -m "feat: persistent HistoryStore created once per hass (Refs #25)"
-```
+- [ ] **Step 2: Run to verify they fail:** `HA_TESTS test_ha_history.py`. Expected: FAIL (`ModuleNotFoundError: ... history_store`). The CI `home-assistant` job covers it; no workflow change.
+- [ ] **Step 3: Implement** `history_store.py`; in `async_register_studio_services` (after the `DATA_KEY` guard, before the `async_register_admin_service` calls) `await async_setup_history(hass)`; in `async_setup_entry` pass `history=hass.data[HISTORY_KEY]`.
+- [ ] **Step 4: Run** `HA_TESTS test_ha_history.py`, then `HA_TESTS "test_ha*.py"` for regressions. Expected: PASS. (`async_setup_entry` fails on the unknown `history` kwarg until Task 5; if the full run is red only for that reason, land Task 5's constructor kwarg in the same commit.)
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint tests/test_ha_history.py && git commit -m "feat: persistent HistoryStore created once per hass (Refs #25)"`
 
 ---
 
@@ -311,18 +250,10 @@ git commit -m "feat: persistent HistoryStore created once per hass (Refs #25)"
   - `test_a_cancelled_job_is_recorded_inside_the_task`: cancel through `printer.async_cancel()` after the fake raster write; the entry exists when `async_cancel` returns.
   - `test_a_reprinted_bitmap_shares_its_blob`: two jobs with identical bytes -> `snapshot()["blobs"]` has one key and two entries.
 
-- [ ] **Step 2: Run to verify they fail** — Step 2 command of Task 4. Expected: FAIL (`TypeError: unexpected keyword argument 'history'` / `'source'`).
-
-- [ ] **Step 3: Implement** per Interfaces; add `from homeassistant.helpers import device_registry as dr` and `from .const import DOMAIN` imports where missing.
-
-- [ ] **Step 4: Run** the HA discovery (`-p "test_ha*.py"`) and the `tests` job list. Expected: PASS, existing tests untouched.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint tests/test_ha_history.py
-git commit -m "feat: record every print job in history from the owned job task (Refs #25)"
-```
+- [ ] **Step 2: Run to verify they fail:** `HA_TESTS test_ha_history.py`. Expected: FAIL (`TypeError: unexpected keyword argument 'history'` / `'source'`).
+- [ ] **Step 3: Implement** per Interfaces (`from homeassistant.helpers import device_registry as dr`, `from .const import DOMAIN` where missing).
+- [ ] **Step 4: Run** `HA_TESTS "test_ha*.py"` and `TESTS`. Expected: PASS, existing tests untouched.
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint tests/test_ha_history.py && git commit -m "feat: record every print job in history from the owned job task (Refs #25)"`
 
 ---
 
@@ -341,15 +272,10 @@ git commit -m "feat: record every print job in history from the owned job task (
   - `test_print_bitmap_optional_field_boundaries`: title of 80 chars accepted, 81 rejected; `source="button"` and `source="history"` rejected; a recipe of exactly 64 KiB compact JSON accepted, one byte more rejected, a list/str recipe rejected; every rejection raises before `async_print` is awaited.
   - `test_print_bitmap_end_to_end_records_the_panel_recipe`: real `StudioPrinter` with `history=store`, patched transport; entry has `source == "studio"`, `title`, the exact recipe dict, and `status == "sent"`; a call without recipe stores `recipe None` and `title "Bitmap"`.
   - Update Plan 1's `test_print_bitmap_prints_exact_bytes_and_returns_server_hash` in `tests/test_ha_studio.py`: it asserts `async_print` awaited with `("bitmap", {"rows": 2, "bitmap": ...}, 24)`; the handler now also passes `recipe`, `title` and `source`, so that assertion changes to the new call shape in this task (it would otherwise go red).
-- [ ] **Step 2:** run Task 4's Step 2 command. Expected: FAIL (`extra keys not allowed @ data['recipe']`).
+- [ ] **Step 2:** `HA_TESTS test_ha_history.py`. Expected: FAIL (`extra keys not allowed @ data['recipe']`).
 - [ ] **Step 3: Implement.** Add the three fields to the `print_bitmap` entries in `services.yaml` (selector `object` for `recipe`, `text` for `title`, `select` with `studio`/`service` for `source`), `strings.json`, `translations/en.json`, `translations/ru.json` (name + description each; `ru` in Russian).
-- [ ] **Step 4:** run `-p "test_ha*.py"`; PASS. hassfest in CI validates the metadata.
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint tests/test_ha_history.py
-git commit -m "feat: print_bitmap accepts recipe, title and source for history (Refs #25)"
-```
+- [ ] **Step 4:** `HA_TESTS "test_ha*.py"`; PASS (hassfest in CI validates the metadata).
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint tests && git commit -m "feat: print_bitmap accepts recipe, title and source for history (Refs #25)"`
 
 ---
 
@@ -371,15 +297,10 @@ git commit -m "feat: print_bitmap accepts recipe, title and source for history (
   - `test_history_list_hides_payload_and_pages_newest_first`: 3 entries (one with `recipe None`, one whose blob was removed via a hand-edited store file); response `total == 3`; no entry has `bitmap_z` or `recipe` keys; `has_recipe` and `reprintable` booleans are right; `limit=1, offset=1` returns the middle entry; `limit=0`, `limit=201`, `offset=-1`, `limit=True` and `offset=True` raise (the schema rejects bool explicitly, `vol.All(int, ...)` alone accepts it).
   - `test_history_get_returns_recipe_and_bitmap_z_and_validates_the_id`: full entry; `id="../../x"`, a 31-char id and an unknown valid id raise.
   - `test_history_delete_removes_one_entry_and_clear_removes_all`: a second delete of the same id raises; clear empties the list and the blob map.
-- [ ] **Step 2:** run Task 4's Step 2 command. Expected: FAIL (`ServiceNotFound: history_list`).
-- [ ] **Step 3: Implement.** Metadata for all four in `services.yaml` (Russian name/description, `history_list` fields `limit` and `offset` as number boxes, `id` as text), `strings.json`, `translations/{en,ru}.json`.
-- [ ] **Step 4:** `-p "test_ha*.py"`; PASS.
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint tests/test_ha_history.py
-git commit -m "feat: admin history list, get, delete and clear services (Refs #25)"
-```
+- [ ] **Step 2:** `HA_TESTS test_ha_history.py`. Expected: FAIL (`ServiceNotFound: history_list`).
+- [ ] **Step 3: Implement.** Metadata for all four in `services.yaml` (Russian name/description; `limit`, `offset` as number boxes, `id` as text), `strings.json`, `translations/{en,ru}.json`.
+- [ ] **Step 4:** `HA_TESTS "test_ha*.py"`; PASS.
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint tests/test_ha_history.py && git commit -m "feat: admin history list, get, delete and clear services (Refs #25)"`
 
 ---
 
@@ -401,15 +322,10 @@ git commit -m "feat: admin history list, get, delete and clear services (Refs #2
   - `test_reprint_while_the_printer_is_busy_is_refused`: with a held job, raises `ServiceValidationError("Printer is busy; ...")`; entry count unchanged.
   - `test_every_new_service_rejects_a_non_admin_caller` (models `test_nonadmin_cannot_use_studio_actions`): for `print_bitmap`, `history_list`, `history_get`, `history_delete`, `history_clear`, `history_reprint`, each with schema-valid data and `Context(user_id="nonadmin")` raises `Unauthorized`; afterwards the store content and the printer mock are unchanged.
   - `test_hostile_markup_is_stored_as_inert_text_for_every_entry_point`: markup `<img src=x onerror=alert(1)>` through `print_text` (admin-free legacy handler, real `StudioPrinter`, fake transport failing after raster), through `print_bitmap` `title` and `recipe` strings: `history_get` returns the strings byte-for-byte (the server does not sanitise; the panel is the defence, Task 9).
-- [ ] **Step 2:** run Task 4's Step 2 command. Expected: FAIL (`ServiceNotFound: history_reprint`).
+- [ ] **Step 2:** `HA_TESTS test_ha_history.py`. Expected: FAIL (`ServiceNotFound: history_reprint`).
 - [ ] **Step 3: Implement.** Metadata in `services.yaml`, `strings.json`, `translations/{en,ru}.json`.
-- [ ] **Step 4:** `-p "test_ha*.py"`, then the `tests` job list and ruff. PASS.
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint tests/test_ha_history.py
-git commit -m "feat: history_reprint prints the stored bitmap after re-validation (Refs #25)"
-```
+- [ ] **Step 4:** `HA_TESTS "test_ha*.py"`, `TESTS`, `LINT`. PASS.
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint tests/test_ha_history.py && git commit -m "feat: history_reprint prints the stored bitmap after re-validation (Refs #25)"`
 
 ---
 
@@ -433,21 +349,10 @@ git commit -m "feat: history_reprint prints the stored bitmap after re-validatio
 
 - [ ] **Step 1: Write the failing browser test** in `tests/browser_studio.py` (extend the mock HA harness `service()` with `history_list`, `history_get` and `history_reprint`; run on Chromium and Firefox like Plan 1's tests): `test_history_drawer_renders_hostile_entries_as_text` (entries with title `<img src=x onerror=window.__pwned=1>`, status `<b>x</b>`, thumb `"><script>1</script>`, a valid thumb, a 3000-char title: `window.__pwned` undefined, `.history-title` `textContent` equals the hostile string, no `script` or `img[onerror]` inside `#history`, bad status shows `?`, only the valid thumb has a `data:image/png;base64,` src); `test_drawer_buttons_follow_has_recipe_reprintable_and_inflight` (the three disabled conditions, and a sensor state in flight disables every Reprint); `test_reprint_of_an_uncertain_entry_asks_first` (dialog dismissed -> zero `history_reprint` calls; accepted -> one call with exactly `{device_id, id}`); `test_open_in_editor_loads_the_recipe_and_shows_the_stored_bitmap` (editor field values equal the recipe; the comparison canvas bytes hash to the mock's `bitmap_sha256`; a recipe with `options.font = "Nope"` shows the fallback notice); `test_drawer_pages_and_never_prints_on_open` (second page uses `offset: 50`; the mock records no `print_*` or `history_reprint` call while only opening, scrolling and loading more); `test_studio_print_sends_recipe_title_and_source` (the `print_bitmap` payload has `source == "studio"`, `title`, `recipe.v == 1`; an oversized document omits the recipe; image mode sends none of the three).
 
-- [ ] **Step 2: Run to verify it fails**
-
-Run: `python tests/browser_studio.py`
-Expected: FAIL (`#history-toggle` not found). Covered by the CI `browser` job.
-
+- [ ] **Step 2: Run to verify it fails:** `python tests/browser_studio.py`. Expected: FAIL (`#history-toggle` not found).
 - [ ] **Step 3: Implement** the modules and shell changes.
-
-- [ ] **Step 4: Run** `python tests/browser_studio.py` — expected PASS on both browsers; then `ruff check . && ruff format --check .`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add custom_components/tinyprint/frontend tests/browser_studio.py
-git commit -m "feat: panel history drawer with reprint and open in editor (Refs #25)"
-```
+- [ ] **Step 4: Run** `python tests/browser_studio.py` (PASS on both browsers) and `LINT`.
+- [ ] **Step 5: Commit:** `git add custom_components/tinyprint/frontend tests/browser_studio.py && git commit -m "feat: panel history drawer with reprint and open in editor (Refs #25)"`
 
 ---
 
@@ -456,17 +361,9 @@ git commit -m "feat: panel history drawer with reprint and open in editor (Refs 
 **Files:**
 - Modify: `docs/studio.md` (add `### History` under `## Privacy and persistence`, the heading Plan 1 leaves; add service reference rows for `print_bitmap` `recipe`/`title`/`source` and the five history services), `docs/CHANGELOG.md` (created by Plan 1; create it with a `# Changelog` heading if absent), `README.md` (one line listing history)
 
-- [ ] **Step 1:** Write the `### History` section: what is stored, the entry statuses and the raster-write boundary, that Reprint sends the stored bitmap and Open in editor re-renders in the current browser (bits may differ), the 200 entries / 5 MiB caps with byte-cap precedence, and every privacy statement from Global Constraints (storage path, backups, `call_service` events and the 32768-byte drop, the `recorder: exclude: event_types: [call_service]` YAML snippet, `history_clear` limits, removed printers, non-admin eviction). Add the `0.3.1` changelog entry: history and its services, `print_bitmap` optional fields, `last_result.raster_started`.
-- [ ] **Step 2: Verify the text matches the code**
-
-Run: `grep -n "32768\|call_service\|history_clear\|200\|5 MiB" docs/studio.md`
-Expected: each statement present once; the numbers equal `MAX_ENTRIES`, `MAX_BYTES`.
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs README.md
-git commit -m "docs: print history, privacy and changelog (Refs #25)"
-```
+- [ ] **Step 1:** Write the `### History` section: what is stored, the statuses and the raster-write boundary, that Reprint sends the stored bitmap while Open in editor re-renders in the current browser (bits may differ), the 200 entries / 5 MiB caps with byte-cap precedence, and every privacy statement from Global Constraints. Add the `0.3.1` changelog entry: history and its services, `print_bitmap` optional fields, `last_result.raster_started`.
+- [ ] **Step 2: Verify:** `grep -n "32768\|call_service\|history_clear\|200\|5 MiB" docs/studio.md`. Expected: each statement present once; the numbers equal `MAX_ENTRIES`, `MAX_BYTES`.
+- [ ] **Step 3: Commit:** `git add docs README.md && git commit -m "docs: print history, privacy and changelog (Refs #25)"`
 
 ---
 
@@ -492,26 +389,12 @@ git commit -m "docs: print history, privacy and changelog (Refs #25)"
 **Files:**
 - Modify (0.3.0 -> 0.3.1): `PANEL_VERSION` in `custom_components/tinyprint/studio.py`, `custom_components/tinyprint/manifest.json` (`version`), `custom_components/tinyprint/diagnostics.py` (`"version"`), `README.md` (the `Current version:` line under the title that Plan 1 added; the `## Direct local LE (since 0.2.2)` heading is a feature label and stays), `tests/browser_studio.py` (mock `printer_info` `"version"`), `tests/test_ha_bridge.py` (`test_component_versions_match_release`, three assertions)
 
-- [ ] **Step 1:** Update every site; confirm none is missed:
-
-Run: `grep -rn "0\.3\.0" --include=*.py --include=*.json --include=*.md . | grep -v "docs/superpowers\|CHANGELOG"`
-Expected: no output.
-- [ ] **Step 2: Run everything**
-
-Run: the `tests` job pytest list and `ruff check . && ruff format --check .`; the Task 4 Docker command with `-p "test_ha*.py"`; `python tests/browser_studio.py`.
-Expected: all pass.
-- [ ] **Step 3: Commit**
-
-```bash
-git add -A custom_components tests README.md
-git commit -m "chore: release 0.3.1 (Refs #25)"
-```
+- [ ] **Step 1:** Update every site, then `grep -rn "0\.3\.0" --include=*.py --include=*.json --include=*.md . | grep -v "docs/superpowers\|CHANGELOG"`. Expected: no output.
+- [ ] **Step 2: Run everything:** `TESTS`, `LINT`, `HA_TESTS "test_ha*.py"`, `python tests/browser_studio.py`. Expected: all pass.
+- [ ] **Step 3: Commit:** `git add -A custom_components tests README.md && git commit -m "chore: release 0.3.1 (Refs #25)"`
 
 ---
 
 ## Self-Review
 
-1. **Spec coverage:** Store/blob/caps/schedule: Tasks 3-4. Entry schema and status precedence with `raster_started`: Tasks 1, 3, 5. Recording in the owned task, legacy pre-raster exclusion, write failure isolation: Task 5. `print_bitmap` extension and recipe construction (server in Tasks 3/5, panel in Task 9): Tasks 3, 5, 6, 9. Five admin services, bounded decompression, revalidation: Tasks 7-8. Drawer, injection, disabled states, `thumb` regex, delivery-uncertain warning, Open in editor and comparison: Task 9. Metadata for new services: Tasks 6-8. Privacy docs: Task 10. Injection and authorisation tests: Tasks 8, 9. Version and workflow wiring: Tasks 3, 12. Physical verification: Task 11 (MANUAL).
-2. **Consciously not covered:** the drawer has no delete or clear buttons (the spec lists only Open in editor and Reprint; delete and clear exist as services); a job that fails while rendering has no bitmap, so no entry is written (the entry schema requires `bitmap_sha256`).
-3. **Names:** `raster_started`, `progress`, `HistoryRing`, `HistoryStore`, `HISTORY_KEY`, `job_status`, `title_for`, `recipe_for`, `check_recipe`, `unpack_bitmap`, `summary`, `detail`, `async_register_history_services(hass, store, resolve_printer)` are used identically in every task that mentions them.
-4. **Proportion:** the plan is about 1.8x the spec's size in bytes, mostly test names with their assertions; code blocks are tests and signatures only.
+Not covered by design: the drawer has no delete or clear buttons (the spec lists only Open in editor and Reprint; the services exist); a job that fails while rendering has no bitmap, so no entry is written (the schema requires `bitmap_sha256`).
