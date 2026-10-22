@@ -11,10 +11,12 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.service import async_register_admin_service
 
 from .const import DOMAIN
 from .diagnostics import transport_info
+from .sensor import IN_FLIGHT_STATES
 from .studio_render import PRESETS, TEMPLATES, preview_result, render_document
 
 DATA_KEY = "tinyprint_studio"
@@ -98,6 +100,7 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
 
     async def printer_info(call: ServiceCall) -> dict[str, Any]:
         registry = dr.async_get(hass)
+        entity_registry = er.async_get(hass)
         printers = []
         for printer in hass.data[DOMAIN].values():
             device = registry.async_get_device(identifiers={(DOMAIN, printer.address)})
@@ -111,6 +114,9 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             printers.append(
                 {
                     "device_id": device.id if device else None,
+                    "entity_id": entity_registry.async_get_entity_id(
+                        "sensor", DOMAIN, f"{printer.address}_job_status"
+                    ),
                     "name": printer.name,
                     "status": printer.status,
                     "transport": transport,
@@ -127,6 +133,7 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             "templates": TEMPLATES,
             "presets": PRESETS,
             "version": PANEL_VERSION,
+            "in_flight_states": sorted(IN_FLIGHT_STATES),
         }
 
     async def diagnose(call: ServiceCall) -> dict[str, Any] | None:

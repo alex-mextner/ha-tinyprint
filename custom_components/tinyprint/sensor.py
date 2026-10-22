@@ -5,6 +5,10 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from .const import DOMAIN
 from .entity import TinyPrintEntity
 
+# Plan 3 adds waiting_for_printer to both IN_FLIGHT_STATES and TinyPrintJobSensor._attr_options.
+IN_FLIGHT_STATES = frozenset({"rendering", "connecting", "printing"})
+SETTLED_STATES = frozenset({"idle", "sent", "error"})
+
 
 async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities([TinyPrintJobSensor(hass.data[DOMAIN][entry.entry_id])])

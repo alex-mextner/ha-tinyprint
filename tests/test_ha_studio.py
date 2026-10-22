@@ -18,6 +18,11 @@ except ImportError as error:
     raise unittest.SkipTest("Run inside the Home Assistant test image") from error
 
 from custom_components.tinyprint import async_setup
+from custom_components.tinyprint.sensor import (
+    IN_FLIGHT_STATES,
+    SETTLED_STATES,
+    TinyPrintJobSensor,
+)
 
 
 class StudioAPITests(unittest.IsolatedAsyncioTestCase):
@@ -117,6 +122,10 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.tinyprint.studio.dr.async_get", return_value=registry),
             patch(
+                "custom_components.tinyprint.studio.er.async_get",
+                return_value=MagicMock(async_get_entity_id=MagicMock(return_value=None)),
+            ),
+            patch(
                 "custom_components.tinyprint.studio.bluetooth.async_last_service_info",
                 return_value=SimpleNamespace(rssi=57),
             ),
@@ -132,6 +141,62 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["printers"][0]["visible"])
         self.assertEqual(len(result["templates"]), 6)
         self.assertNotIn("AA:BB:CC:DD:EE:FF", str(result))
+
+    def _info_with_entity_registry(self, entity_id):
+        self.hass.data["tinyprint"] = {
+            "one": SimpleNamespace(
+                address="AA:BB:CC:DD:EE:FF",
+                name="Test",
+                status="idle",
+                last_error=None,
+                last_result={},
+            )
+        }
+        dev_registry = MagicMock()
+        dev_registry.async_get_device.return_value = SimpleNamespace(id="device")
+        ent_registry = MagicMock()
+        ent_registry.async_get_entity_id.return_value = entity_id
+        return dev_registry, ent_registry
+
+    async def _call_printer_info(self, dev_registry, ent_registry):
+        with (
+            patch("custom_components.tinyprint.studio.dr.async_get", return_value=dev_registry),
+            patch("custom_components.tinyprint.studio.er.async_get", return_value=ent_registry),
+            patch(
+                "custom_components.tinyprint.studio.bluetooth.async_last_service_info",
+                return_value=None,
+            ),
+            patch(
+                "custom_components.tinyprint.studio.bluetooth.async_address_present",
+                return_value=True,
+            ),
+        ):
+            return await self.hass.services.async_call(
+                "tinyprint", "printer_info", {}, blocking=True, return_response=True
+            )
+
+    async def test_sensor_options_are_exactly_in_flight_plus_settled(self):
+        sensor = TinyPrintJobSensor(SimpleNamespace(address="AA:BB:CC:DD:EE:FF", name="Test"))
+        self.assertEqual(set(sensor.options), IN_FLIGHT_STATES | SETTLED_STATES)
+        self.assertTrue(IN_FLIGHT_STATES.isdisjoint(SETTLED_STATES))
+
+    async def test_printer_info_returns_job_sensor_entity_id_and_in_flight_states(self):
+        dev_registry, ent_registry = self._info_with_entity_registry("sensor.test_print_job")
+        result = await self._call_printer_info(dev_registry, ent_registry)
+        ent_registry.async_get_entity_id.assert_called_once_with(
+            "sensor", "tinyprint", "AA:BB:CC:DD:EE:FF_job_status"
+        )
+        self.assertEqual(result["printers"][0]["entity_id"], "sensor.test_print_job")
+        self.assertEqual(result["in_flight_states"], sorted(IN_FLIGHT_STATES))
+        for state in ("connecting", "printing", "rendering"):
+            self.assertIn(state, result["in_flight_states"])
+        for state in ("unknown", "unavailable"):
+            self.assertNotIn(state, result["in_flight_states"])
+
+    async def test_printer_info_entity_id_is_none_when_the_sensor_is_not_registered(self):
+        dev_registry, ent_registry = self._info_with_entity_registry(None)
+        result = await self._call_printer_info(dev_registry, ent_registry)
+        self.assertIsNone(result["printers"][0]["entity_id"])
 
     async def test_diagnostic_version_matches_manifest(self):
         import json

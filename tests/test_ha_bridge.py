@@ -93,6 +93,11 @@ class BridgeCase(unittest.IsolatedAsyncioTestCase):
         registry.async_get_device.return_value = SimpleNamespace(id="device")
         return patch("custom_components.tinyprint.studio.dr.async_get", return_value=registry)
 
+    def entity_registry(self):
+        registry = MagicMock()
+        registry.async_get_entity_id.return_value = None
+        return patch("custom_components.tinyprint.studio.er.async_get", return_value=registry)
+
     def assert_no_ble(self):
         self.ble.assert_not_called()
         self.connect.assert_not_called()
@@ -417,6 +422,7 @@ class DiagnosticsTests(BridgeCase):
         }
         with (
             self.registry(),
+            self.entity_registry(),
             patch(
                 "custom_components.tinyprint.studio.bluetooth.async_last_service_info",
                 return_value=SimpleNamespace(rssi=57),
@@ -441,6 +447,7 @@ class DiagnosticsTests(BridgeCase):
         # A second call inside the cache window does not poll the bridge again.
         with (
             self.registry(),
+            self.entity_registry(),
             patch(
                 "custom_components.tinyprint.studio.bluetooth.async_last_service_info",
                 return_value=None,
@@ -470,6 +477,7 @@ class DiagnosticsTests(BridgeCase):
         self.hass.data[DOMAIN]["entry"] = StudioPrinter(self.hass, "entry", ADDRESS, "Test", None)
         with (
             self.registry(),
+            self.entity_registry(),
             patch(
                 "custom_components.tinyprint.studio.bluetooth.async_last_service_info",
                 return_value=None,
@@ -511,6 +519,7 @@ class DiagnosticsTests(BridgeCase):
         )
         with (
             self.registry(),
+            self.entity_registry(),
             patch(
                 "custom_components.tinyprint.studio.bluetooth.async_last_service_info",
                 return_value=None,
