@@ -58,8 +58,9 @@ panel (JS renderer) --print_bitmap{device_id, rows, bitmap_b64, recipe}--> HA se
 - `print_bitmap` (new, registered with `async_register_admin_service` like the existing studio services in
   `studio.py`): `device_id`, `rows` (1..2048, `bool` rejected), `bitmap_b64` (strict base64 decoding to
   exactly `rows * 48` bytes; encoded length bounded before decoding), optional `recipe` (JSON object, at
-  most 64 KiB, stored for history, never interpreted by the server) and optional `title` (text, at most
-  80 chars, supplied by the panel; the server derives titles itself only for the actions it renders).
+  most 64 KiB, stored for history, never interpreted by the server), optional `title` (text, at most
+  80 chars, supplied by the panel) and optional `source` (`studio` or `service`, default `service`; the
+  panel sends `studio`; the server derives titles itself only for the actions it renders).
   Extract the rows, base64 and size checks from `bridge_wire.parse_print_request` (`:97-123`) into a
   neutral module (`bitmap.py`) imported by both `bridge_wire` and `print_bitmap`; do not copy them.
   Validation precedes any radio activity.
@@ -68,7 +69,8 @@ panel (JS renderer) --print_bitmap{device_id, rows, bitmap_b64, recipe}--> HA se
   `hass.services.async_register` (`__init__.py:76-82`), so non-admin HA users can call them and thereby
   create history entries. History content is therefore untrusted input (see Print history).
 - The Studio panel stops calling `preview` and `print_document`. It still calls `printer_info` for the
-  printer list and the template catalog (field names, required flags, captions, placeholders).
+  printer list (each printer with its job sensor `entity_id`) and the template catalog (field names,
+  required flags, captions, placeholders).
 - `preview`, `print_document`, `print_template`, `print_text`, `print_qr`, `print_image` remain for
   automations and keep their Pillow renderer and `expected_sha256` contract unchanged.
 - No auto print: nothing prints on load, edit, upload or history open. Print and Reprint are explicit clicks.
@@ -90,9 +92,13 @@ Contract (all measured in the spike):
    stretch is rejected by the font shorthand.
 3. Pack: a pixel is black iff alpha >= 96 (the server's `>= 160` white threshold on an opaque-white
    background), MSB first, 1 = ink, 48 bytes per row. The preview image is built by unpacking those bytes.
+   Image blocks are first composited onto white (transparent pixels become white, EXIF orientation
+   applied, as `_load_image` does) and the dither output is packed directly.
 4. Layout parity with `studio_render.py` (`_label`, `_text_block`, `_stack`): same block order, insets
-   (10; 34 for checklist), sizes (title +6, heading +14, footer -4), border, 8-row top margin, 2048-row
-   cap. Differences are bugs, checked by the golden test below.
+   (10; 34 for checklist), derived sizes including the existing clamps (title `min(64, size + 6)`, heading
+   `min(64, size + 14)`, footer `max(12, size - 4)`, `studio_render.py:305-325`), line step from integer
+   ascent and descent as FreeType reports them (JS rounds the font metrics to integers), border, 8-row top
+   margin, 2048-row cap. Differences are bugs, checked by the golden test below.
 5. QR: vendored dependency-free JS encoder (Nayuki QR Code generator, MIT, single file) with the same
    integer module scaling, quiet zone of 4 modules and minimum 3 dots per module as `_qr`. Module-for-module
    equality with Python `qrcode` holds when version and mask are forced (12 of 14 test strings); identical
@@ -106,24 +112,29 @@ Contract (all measured in the spike):
 | Font | Axes exposed | Notes |
 | --- | --- | --- |
 | Roboto Flex | width 25-151 (default 100), weight 100-1000 (default 400) | `opsz` pinned at 14, parametric axes pinned. Subset to Latin, Latin-Ext, Cyrillic U+0400-052F, common punctuation, No, rouble, euro. OFL 1.1; ship `OFL.txt` beside it. |
-| Tiny5 | width 100 or 200 | Weight fixed 400. Static font, so `font_width` means an integer horizontal pixel scale (100 = 1x, 200 = 2x) applied at draw time; the Python renderer accepts only 100 for Tiny5. Pixel-perfect only at weight 400, width 100/200 and sizes that are multiples of 8 (spike: 0% intermediate alpha). The derived title, heading and footer sizes are rounded to a multiple of 8 (minimum 8) so they stay pixel-perfect. The UI restricts Tiny5 to those values. |
+| Tiny5 | width 100 or 200 | Weight fixed 400. Static font, so `font_width` means an integer horizontal pixel scale (100 = 1x, 200 = 2x) applied at draw time; pinned and hashed like Roboto Flex. Pixel-perfect only at weight 400, width 100/200 and sizes that are multiples of 8 (spike: 0% intermediate alpha). For Tiny5 the derived title, heading and footer sizes are rounded half up to a multiple of 8 with a minimum of 8 (instead of the +6/+14/-4 clamps above); the per-font table carries this rule and both renderers read it. The UI restricts Tiny5 to those values. |
 
 - Sliders expose the full Roboto Flex ranges. No hard clamps: the WYSIWYG strip is the legibility check.
   A non-blocking hint appears when stroke counters are likely to close (weight > 700 at <= 24 px, weight
   1000 below 72 px with width < 100, width < 50 with weight > 800).
 - `font_size` range grows from 12-48 to 12-96 for Roboto Flex; Tiny5 uses 8, 16, 24, 32, 40, 48. The
-  catalog served by `printer_info` carries one per-font table (sizes, width, weight) that the UI, the
-  validation and the tests all read. `normalize_options` (`studio_render.py:150-158`) moves to the same
-  bounds, so a recipe stored by the browser replays through the Pillow actions; legacy `print_text`
-  keeps its own 12-64 range (`__init__.py:74`).
+  catalog served by `printer_info` carries one per-font table (allowed sizes, width kind and values,
+  derived-size rule) that the UI, the validation and the tests all read. `normalize_options`
+  (`studio_render.py:150-158`) moves to the same size bounds and gains `columns` (only `1` is accepted by
+  Pillow) and Tiny5 `font_width` (only `100`). A recipe that uses columns 2-3 or Tiny5 width 200 is
+  browser-only: the Pillow actions reject it with the normal validation error, and **Open in editor** is
+  its replay path. Legacy `print_text` keeps its own 12-64 range (`__init__.py:74`).
 - A reproducible `tools/build_fonts.py` produces the shipped files from pinned upstream sources and prints
   their SHA-256 (Roboto Flex upstream: google/fonts commit `45e3d5269e4a17d823f6d84470bc084dc5ae46f6`,
   file SHA-256 `9b523f7d82593df0107173849ebb8c817471a1df4b4fb2c3cbf40cfd810c8281`). Fonts are committed
   as binaries with their licenses; CI verifies the hashes.
-- Python renderer: bundled Roboto Flex becomes the default font when none is configured, and gains
+- Python renderer: bundled Roboto Flex becomes the default font when none is configured (a found system
+  font from `FONT_CANDIDATES` no longer counts; this changes the output and `expected_sha256` of existing
+  automations and goes into the release notes), and gains
   `font`, `font_width`, `font_weight` options applied with `set_variation_by_axes` in fvar order
   (pass the full list; out-of-range values are silently clamped by Pillow, so validate first;
   re-apply axes after `font_variant`; one font object per render, never shared across threads).
+  `font` is a closed enum of the bundled names (rejected otherwise, never joined into a path).
   `font_path` keeps working as an override.
 
 ## Editor surface and placeholders
@@ -145,10 +156,15 @@ Contract (all measured in the spike):
   The `Preview` button, the hint text, and the "refresh preview" notices are removed.
 - Print is enabled iff the current bitmap has ink, some field has non-blank input (an uploaded image or
   QR data counts as input), required template fields are non-blank, a device is selected, no render is
-  pending, the last render succeeded, and no job for that device is in flight (`async_print` already
-  rejects a concurrent job with "Printer is busy"; the panel disables Print and Reprint instead of
-  letting the click fail). Each render carries a generation number; the bitmap, geometry and `recipe`
-  used by Print come from the same generation, and a result from an older generation is discarded.
+  pending, the last render succeeded, and no job for that device is in flight. In-flight state comes from
+  the panel's own pending call and from the printer's job sensor: the panel reads
+  `hass.states[entity_id]` (HA pushes it into the panel's `hass` setter on every state change, so no
+  subscription code is needed), using the `entity_id` that `printer_info` returns. A job started elsewhere
+  therefore disables Print and Reprint too; if the state is stale the click still gets "Printer is busy"
+  from `async_print` and is shown as a notice. The rule is one pure function returning a list of blocker
+  codes, used for the button state, the tooltip and the tests. Each render carries a generation number; the
+  bitmap, geometry and `recipe` used by Print come from the same generation, and a result from an older
+  generation is discarded.
 
 Placeholder rule (the user's wording: examples live in placeholders and are ignored as soon as one field is
 filled):
@@ -171,7 +187,7 @@ filled):
 - Flow: greedy wrap at column width, then split into n columns minimising the tallest column, splitting at
   line boundaries; checklist items are atomic (never split across columns). Wrapping uses `measureText`
   with the same binary search as `_text_block`. Ink overhangs `measureText` width by up to 1.1 px, so the
-  gutter is measured from advance width.
+  gutter and the "no line wider than its column" invariant are measured on advance width, not ink.
 - Python renderer does not get columns in this change (non-goal). Parity with Python is therefore tested
   for `columns = 1` only; columns 2 and 3 are tested in JS against invariants (see Documentation, tests).
 
@@ -182,26 +198,32 @@ filled):
   service or button is usable, so a first record cannot overwrite stored history. All mutations run on the
   event loop. A ring buffer capped at 200 entries and 5 MiB of serialised data; the byte cap takes
   precedence, so 200 entries holds only for small labels (photo labels of about 130 KB retain roughly 25-40).
-- Recording point: the common job layer (`StudioPrinter._async_print_job` and its legacy-action
-  equivalents; the plan must confirm every entry point funnels through one call site) after the bitmap
-  exists and when the outcome is known. Recorded sources: `studio`, `service` (all actions),
-  `button` (test print), `history` (reprint).
-- Entry: `id` (`uuid4().hex`, validated on every input), `created` (UTC ISO-8601), `device_id`, `source`
-  (`studio`, `service`, `button`, `history`; set by the server from the call path, never from client
-  input), `status` (`sent`, `failed`, `delivery_uncertain`, `cancelled`), `phase`, `rows`, `ink_percent`,
+- Recording point: `StudioPrinter._async_print_job` (`studio_runtime.py:172`), the one function every entry
+  point reaches because `__init__` imports `StudioPrinter` as the printer class. Recording happens inside
+  the owned job task, so a cancelled or unloading job is still recorded. `source` is `studio` or `service`
+  from the `print_bitmap` parameter, `service` for all legacy and template actions, `button` for the test
+  print and `history` for a reprint. A history write failure is logged and never changes the job result.
+- Entry: `id` (`uuid4().hex`, validated on every input), `created` (UTC ISO-8601), `device_id`, `source`,
+  `status` (`sent`, `failed`, `delivery_uncertain`, `cancelled`), `phase`, `rows`, `ink_percent`,
   `bitmap_sha256`, `bitmap_z` (zlib + base64 of the packed bitmap), `thumb` (PNG of at most 96 dots wide,
-  base64, made at record time in the executor and counted against the byte cap), `recipe` (document JSON
+  base64, made inline in the job task and counted against the byte cap), `recipe` (document JSON
   for Studio and template/text/QR actions; `null` for images and for `print_bitmap` calls without one;
   originals of images are never stored, and the server cannot check that a client recipe holds no image
-  data, so that is a client guarantee), `title` (at most 80 chars, for the list), `job_id`, `timings`
-  (object, defined by the transport spec; may be `null`).
-- Failed and `delivery_uncertain` jobs are recorded too. A reprint of a `delivery_uncertain` entry warns
-  that the first copy may have printed.
+  data, so that is a client guarantee), `title` (at most 80 chars, for the list; derived from the text
+  for text and template actions, a generic label for QR and image actions, never a filesystem path),
+  `job_id`, `timings` (object, defined by the transport spec; may be `null`).
+- Failed and `delivery_uncertain` jobs are recorded too. Status precedence: no byte reached the printer and
+  the job was cancelled is `cancelled`; no byte reached the printer otherwise is `failed`; any failure,
+  cancel or printer fault after the first write is `delivery_uncertain`; `sent` only when completion was
+  confirmed. A job that failed before any radio activity from a legacy action stores no `bitmap_z` (it
+  was never printed and cannot be reprinted), which keeps a looping non-admin caller from filling the
+  store. A reprint of a `delivery_uncertain` entry warns that the first copy may have printed.
 - Admin-only services, all registered with `async_register_admin_service`: `history_list` (`limit` default
   50, `offset`; `SupportsResponse.ONLY`; returns entries without `bitmap_z` and `recipe`, with `thumb`),
   `history_get` (`SupportsResponse.ONLY`; one entry with `recipe` and `bitmap_z`), `history_delete`,
   `history_clear`, and `history_reprint` (`device_id`, `id`; prints the stored bitmap, never re-renders;
-  re-validates `rows` and the decoded length through the shared validator before any radio activity).
+  decompresses with an output bound of `2048 * 48 + 1` bytes and re-validates `rows` and the decoded
+  length through the shared validator before any radio activity).
 - Panel: a history drawer. Each row: thumbnail, title, time, status badge. Actions: **Open in editor**
   (loads recipe, re-renders in the current browser; may differ in bits from the stored bitmap because
   engines differ; the drawer shows the stored bitmap for comparison; disabled when `recipe` is `null`;
@@ -214,9 +236,11 @@ filled):
   callers can also print in a loop, they can evict older entries; this is accepted and documented.
 - Privacy: content now persists in `/config/.storage/tinyprint.history` and HA backups. Home Assistant
   also fires a `call_service` event carrying the full `service_data` for every service call, and the
-  recorder stores events by default (it skips only event types excluded in `recorder:`), so the bitmap
-  and recipe of every `print_bitmap` call can also land in the recorder database (verified against
-  HA 2026.9.3 sources; the existing `print_document` text has the same exposure). Documentation says so
+  recorder stores events by default (it skips only event types excluded in `recorder:`). The recorder
+  drops event data above 32768 bytes with a logged error (`MAX_EVENT_DATA_BYTES`), so the bitmap and
+  recipe of small `print_bitmap` calls (up to roughly 500 rows) land in the recorder database and larger
+  ones do not, at the cost of an error log line per print (verified against HA 2026.9.3 sources; the
+  existing `print_document` text has the same exposure). Documentation says so
   plainly and shows `recorder: exclude: event_types: [call_service]`. `history_clear` does not purge
   backups or recorder rows, and history of a removed printer is not deleted automatically. Logs and
   diagnostics stay payload-free (existing test at `tests/test_ha_studio.py` keeps passing).
@@ -234,14 +258,17 @@ filled):
 - New pytest: `print_bitmap` validation matrix (size, base64, rows, bool, oversize), history store (ring
   cap, byte cap, failed jobs recorded, reprint prints the stored bytes), Pillow font axes in fvar order and
   validation, bundled font hash check.
-- Golden parity test: for each template with `columns = 1`, compare Python line breaks and block
-  geometry against the browser (offset tolerance 1 px). Lines within 1 px of the wrap width are asserted
-  separately. CI pins the Pillow and libraqm build of the HA 2026.9.3 image. For columns 2 and 3 the
-  browser test asserts invariants: no line wider than its column, tallest column minimal, checklist items
-  never split. Parity gaps fail the build.
+- Golden parity test: the expected Python line breaks and block geometry for each template with
+  `columns = 1` are committed as `tests/fixtures/layout_cases.json` (regenerated by pytest in the HA-image
+  job, which fails on drift and requires libraqm; without it Pillow lays out differently). The Playwright
+  browser job (Chromium and Firefox, installed explicitly) compares the browser result with that file
+  (offset tolerance 1 px). Lines within 1 px of the wrap width are asserted separately. For columns 2 and 3
+  the browser test asserts invariants: no line wider than its column, tallest column minimal, checklist
+  items never split. Parity gaps fail the build.
 - Injection test: markup planted through `print_text` and through `print_bitmap` `title` and `recipe` is
   shown as text in the history drawer. Authorisation test: a non-admin call to `print_bitmap` and each
   `history_*` service is rejected.
+- The six new services get `services.yaml` entries and `strings.json` / `translations/{en,ru}.json` text.
 - Bump the version together everywhere it appears: `PANEL_VERSION` (`studio.py:21`), `manifest.json:32`,
   `diagnostics.py:15`, `tests/browser_studio.py:47` and `tests/test_ha_bridge.py:400-406` (currently 0.2.2;
   this change is 0.3.0).
