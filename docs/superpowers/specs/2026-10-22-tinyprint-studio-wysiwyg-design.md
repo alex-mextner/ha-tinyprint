@@ -206,8 +206,8 @@ filled):
 - Python columns and Python/JS pixel parity.
 - A custom JS rasteriser on font outlines (would be bit-exact across engines; not needed because the browser
   bitmap is what prints).
-- Verifying iOS/macOS Safari, Windows, or the HA Companion app rendering. Treated as unverified until
-  tested; the spike covered Linux engines only.
+- Guaranteeing iOS/macOS Safari, Windows or HA Companion app (WKWebView) rendering. The spike covered
+  Linux engines only. Phone support is verified in the first implementation task, not assumed (see Risks).
 - Cloud sync, export or import of history.
 
 ## Risks
@@ -219,6 +219,7 @@ filled):
 | JS and Python layouts diverge | Golden parity test in CI. |
 | `.storage` growth | 200 entries and 5 MiB caps, enforced on write. |
 | Slow mobile devices | Latest-wins coalescing per frame; measure on a phone during acceptance. |
+| Phone engines untested (iOS Safari, HA Companion app; voice-dictating users likely use a phone) | First plan task, before any panel work: run the spike recipe on the user's phone and in the Companion app. `OffscreenCanvas` needs iOS 16.4 or later, so the renderer uses a detached `HTMLCanvasElement` when it is absent (spike: bits identical across canvas kinds). Check that single-value `FontFace` `stretch` and `weight` descriptors change glyph widths on the phone. If they do not, fall back to the fontkit outline path (spike: works in all three engines, 0.67 MB). |
 
 ## Acceptance
 
@@ -235,3 +236,5 @@ filled):
    status; a reprint sends exactly the stored bytes.
 7. A physical print of one Cyrillic label in each font and a 2-column label is photographed. Software
    success is never reported as paper output.
+8. The renderer self-check passes on the user's phone and in the Companion app: axis values change glyph
+   widths, a render is deterministic across two runs, and the packed bytes round-trip to the displayed image.

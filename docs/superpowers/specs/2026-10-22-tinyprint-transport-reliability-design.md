@@ -84,9 +84,14 @@ advertisement, 0 if already visible), `connect` (lookup to connected), `notify` 
 - Timeout result: failed, phase `waiting_for_printer`, error code `printer_not_seen`, message names the
   waited seconds and says to switch the printer on or move it closer. It is not `delivery_uncertain`; no
   bytes were sent.
-- Studio: while a print is in flight the panel polls `printer_info` once a second for `last_result.phase`
-  and shows "Printer not seen: switch it on, printing starts automatically (N s left)". The poll stops when
-  the service call returns.
+- Status is pushed, not polled. The runtime writes `phase` and `waiting_until` (UTC ISO-8601) into
+  `last_result` on every phase transition and updates the job sensor state; the sensor already exposes
+  `last_result` as attributes (`sensor.py:27-34`). The panel subscribes to that entity over the existing
+  WebSocket and shows "Printer not seen: switch it on, printing starts automatically (N s left)", counting
+  down locally from `waiting_until`. Automations get the same state for free. `TinyPrintJobSensor`
+  has a fixed enum (`_attr_options`, `sensor.py:16`); add `waiting` to it and to the translations. The plan
+  must confirm how a status change currently reaches the entity (listener or dispatcher) rather than add
+  a second mechanism.
 - Scope: the `proxy` transport (the deployed one). Native, bridge and `local_le` keep their behaviour
   unless the plan finds the same helper applies without extra risk.
 
