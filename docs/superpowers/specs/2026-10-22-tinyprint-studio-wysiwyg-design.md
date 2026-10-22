@@ -63,16 +63,21 @@ panel (JS renderer) --print_bitmap{device_id, rows, bitmap_b64, recipe}--> HA se
   panel sends `studio`; the server derives titles itself only for the actions it renders).
   Extract the rows, base64 and size checks from `bridge_wire.parse_print_request` (`:97-124`) into a
   neutral module (`bitmap.py`) imported by both `bridge_wire` and `print_bitmap`; do not copy them.
-  Validation precedes any radio activity.
+  `bitmap.py` imports only the standard library and `.protocol`: the bridge host loads `bridge_wire`
+  through `bridge/tinyprint_bridge/_shared.py` and `bridge/install.sh` copies a fixed module list
+  (`:119,136`), so `bitmap.py` is added to both loops, to the `_shared.py` docstring and to
+  `tests/test_bridge_installer.py`. Validation precedes any radio activity.
   Returns the same result shape as `print_document` plus `bitmap_sha256` computed by the server.
 - The legacy actions `print_text`, `print_qr` and `print_image` are registered with plain
   `hass.services.async_register` (`__init__.py:76-82`), so non-admin HA users can call them and thereby
   create history entries. History content is therefore untrusted input (see Print history).
 - The Studio panel stops calling `preview` and `print_document`. It still calls `printer_info` for the
-  printer list (each printer with its job sensor `entity_id`) and the template catalog (field names,
-  required flags, captions, placeholders).
+  printer list and the template catalog (field names, required flags, captions, placeholders).
+  `printer_info` gains a field: each printer's job sensor `entity_id`, resolved from the entity registry
+  (the sensor's unique id is `{address}_job_status`, `sensor.py:21`), with a test.
 - `preview`, `print_document`, `print_template`, `print_text`, `print_qr`, `print_image` remain for
-  automations and keep their Pillow renderer and `expected_sha256` contract unchanged.
+  automations and keep their Pillow renderer and the `expected_sha256` mechanism; the default-font change
+  below alters their output in 0.3.0, and pinning `font_path` restores the old output.
 - No auto print: nothing prints on load, edit, upload or history open. Print and Reprint are explicit clicks.
 
 ## Browser renderer
@@ -137,9 +142,10 @@ Contract (all measured in the spike):
   their SHA-256 (Roboto Flex upstream: google/fonts commit `45e3d5269e4a17d823f6d84470bc084dc5ae46f6`,
   file SHA-256 `9b523f7d82593df0107173849ebb8c817471a1df4b4fb2c3cbf40cfd810c8281`). Fonts are committed
   as binaries with their licenses; CI verifies the hashes.
-- Python renderer: bundled Roboto Flex becomes the default font when none is configured (a found system
-  font from `FONT_CANDIDATES` no longer counts; this changes the output and `expected_sha256` of existing
-  automations and goes into the release notes), and gains
+- Python renderers (`studio_render.py` and `render.py`, the latter used by legacy `print_text` and the
+  test button, which today has its own DejaVu-only `FONT_CANDIDATES`): bundled Roboto Flex becomes the
+  default font when none is configured (a found system font no longer counts; this changes the output and
+  `expected_sha256` of existing automations and goes into the release notes), and `studio_render.py` gains
   `font`, `font_width`, `font_weight` options applied with `set_variation_by_axes` in fvar order
   (pass the full list; out-of-range values are silently clamped by Pillow, so validate first;
   re-apply axes after `font_variant`; one font object per render, never shared across threads).
@@ -165,18 +171,20 @@ Contract (all measured in the spike):
   The `Preview` button, the hint text, and the "refresh preview" notices are removed.
 - Print is enabled iff the current bitmap has ink, some field has non-blank input (an uploaded image or
   QR data counts as input), required template fields are non-blank, a device is selected, no render is
-  pending, the last render succeeded, and no job for that device is in flight. In-flight state comes from
-  the panel's own pending call and from the printer's job sensor: the panel reads
-  `hass.states[entity_id]` (HA pushes it into the panel's `hass` setter on every state change, so no
-  subscription code is needed), using the `entity_id` that `printer_info` returns. A job is in flight when
-  the sensor state is any enum value other than `idle`, `sent` and `error`, so a state added later (such as
-  `waiting_for_printer`) counts automatically; `unknown` and `unavailable` do not, so a stale state after a
-  restart cannot lock the panel. A test iterates every sensor option. A job started elsewhere therefore
-  disables Print and Reprint too; the server lock stays the authority, and a stale state still gets
-  "Printer is busy" from `async_print`, shown as a notice. The rule is one pure function returning a list
-  of blocker codes, used for the button state, the tooltip and the tests. Each render carries a generation
-  number; the bitmap, geometry and `recipe` used by Print come from the same generation, and a result from
-  an older generation is discarded.
+  pending, the last render succeeded and is exact (while a slider drag shows a snapped, approximate
+  render, Print is blocked and no `recipe` is built from it), and no job for that device is in flight.
+  In-flight state comes from the panel's own pending call and from the printer's job sensor: the panel
+  reads `hass.states[entity_id]` (HA pushes it into the panel's `hass` setter on every state change, so no
+  subscription code is needed), using the `entity_id` that `printer_info` now returns. `sensor.py` defines
+  `IN_FLIGHT_STATES` next to `_attr_options` (`rendering`, `connecting`, `printing`, and later
+  `waiting_for_printer`), `printer_info` serves it, and a test asserts that every sensor option is in it
+  or in the idle/terminal set; `unknown` and `unavailable` are never in flight, so a stale state after a
+  restart cannot lock the panel. A job started elsewhere therefore disables Print and Reprint too; the
+  server lock stays the authority, and a stale state still gets "Printer is busy" from `async_print`,
+  shown as a notice. The rule is one pure function returning a list of blocker codes, used for the button
+  state, the tooltip and the tests. Each render carries a generation number; the bitmap, geometry and
+  `recipe` used by Print come from the same generation, and a result from an older generation is
+  discarded.
 
 Placeholder rule (the user's wording: examples live in placeholders and are ignored as soon as one field is
 filled):
@@ -207,41 +215,51 @@ filled):
 
 - Store: `homeassistant.helpers.storage.Store`, key `tinyprint.history`, version 1, created once per
   `hass` in `async_setup` and never recreated on entry reload, saved with `async_delay_save` (30 s delay;
-  `data_func` returns a snapshot list of immutable entries, not the live list). One domain-level history
-  object (not one per config entry), loaded before any print service or button is usable, so a first
-  record cannot overwrite stored history. All mutations run on the event loop. A ring buffer capped at 200
-  entries and 5 MiB of serialised data; each entry's size is computed once at insert and a running total is
+  `data_func` returns a snapshot of immutable entries and the Store is created with
+  `serialize_in_event_loop=False`). One domain-level `HistoryStore` object (not one per config entry),
+  loaded before any print service or button is usable, so a first record cannot overwrite stored history.
+  All mutations run on the event loop. Entries reference bitmaps by `bitmap_sha256`; each bitmap
+  (`bitmap_z`, `thumb`) is stored once in a blob map and dropped with its last referencing entry, so
+  reprints and repeated test prints cost no extra bytes and the oldest entries evicted never take a
+  still-referenced bitmap with them. A ring buffer capped at 200 entries and 5 MiB of serialised data
+  (entries plus blobs); each entry's and blob's size is computed once at insert and a running total is
   kept. The byte cap takes precedence, so 200 entries holds only for small labels (photo labels of about
   130 KB retain roughly 25-40).
 - Recording point: `StudioPrinter._async_print_job` (`studio_runtime.py:172`), the one function every entry
-  point reaches because `__init__` imports `StudioPrinter` as the printer class. Recording happens inside
-  the owned job task, so a cancelled or unloading job is still recorded. `source` is `studio` or `service`
-  from the `print_bitmap` parameter, `service` for all legacy and template actions, `button` for the test
-  print and `history` for a reprint. A history write failure is logged and never changes the job result.
+  point reaches because `__init__` imports `StudioPrinter` as the printer class. `async_print` and
+  `_async_print_job` take an explicit `source` argument (`service` by default, `studio` or `service` from
+  the `print_bitmap` parameter, `button` from the test button, `history` from a reprint). Recording
+  happens inside the owned job task, so a cancelled or unloading job is still recorded. A history write
+  failure is logged and never changes the job result.
 - Entry: `id` (`uuid4().hex`, validated on every input), `created` (UTC ISO-8601), `device_id`, `source`,
   `status` (`sent`, `failed`, `delivery_uncertain`, `cancelled`), `phase`, `rows`, `ink_percent`,
-  `bitmap_sha256`, `bitmap_z` (zlib + base64 of the packed bitmap), `thumb` (PNG of at most 96 dots wide,
-  base64, made inline in the job task; a 96-dot thumbnail costs milliseconds and an executor hop would
-  complicate the cancel path; counted against the byte cap), `reprint_of` (set on reprint entries, which
-  store no `bitmap_z` or `thumb` of their own and are reprintable only while the original exists),
-  `recipe` (document JSON with a version field `v: 1` and fully resolved options (explicit font, size,
-  axes, columns), so a later default change does not alter a reopened label; for Studio and
-  template/text/QR actions; `null` for images and for `print_bitmap` calls without one;
-  originals of images are never stored, and the server cannot check that a client recipe holds no image
-  data, so that is a client guarantee), `title` (at most 80 chars, for the list; derived from the text
-  for text and template actions, a generic label for QR and image actions, never a filesystem path),
-  `job_id`, `timings` (object, defined by the transport spec; may be `null`).
+  `bitmap_sha256` (key of the stored blob holding `bitmap_z`, the zlib + base64 of the packed bitmap, and
+  `thumb`, a PNG of at most 96 dots wide, base64, made inline in the job task because a 96-dot thumbnail
+  costs milliseconds and an executor hop would complicate the cancel path), `recipe` (the normalised
+  `print_document` payload plus a version field `v: 1`, built by the shared `normalize_options` on the
+  server for text, template and QR actions and by the panel for Studio, with fully resolved options
+  (explicit font, size, axes, columns) so a later default change does not alter a reopened label; `null`
+  for images and for `print_bitmap` calls without one; originals of images are never stored, and the
+  server cannot check that a client recipe holds no image data, so that is a client guarantee), `title`
+  (at most 80 chars, for the list; derived from the text for text and template actions, a generic label
+  for QR and image actions, never a filesystem path), `job_id`, `timings` (object, defined by the
+  transport spec; may be `null`).
 - Failed and `delivery_uncertain` jobs are recorded too. One boundary is used everywhere, here and in the
-  transport spec: the first raster (print data) write; status queries and the notification setup do not
-  count. Status precedence: no raster write and the job was cancelled is `cancelled`; no raster write
-  otherwise is `failed`; any failure, cancel or printer fault after the first raster write is
-  `delivery_uncertain`; `sent` only when completion was confirmed. A job from a legacy action that failed
-  before the first raster write stores no `bitmap_z` (it was never printed and cannot be reprinted), which
-  keeps a looping non-admin caller from filling the store. A reprint of a `delivery_uncertain` entry warns
-  that the first copy may have printed.
+  transport spec: the first raster (print data) write call; status queries and the notification setup do
+  not count, and a raster write that raises counts as attempted. `send_bitmap` sets a `raster_started`
+  flag just before the first raster write; for a bridge job the HA side derives it as `bytes_written`
+  greater than the length of the leading state request (the bridge wire format is unchanged). Status
+  precedence: no raster write and the job was cancelled is `cancelled`; no raster write otherwise is
+  `failed`; any failure, cancel or printer fault after the first raster write call is
+  `delivery_uncertain`; `sent` when the job ended successfully (`send_bitmap` returns only after the
+  printer reports idle). A job from a legacy (`source: service`) action that failed before the first
+  raster write is not recorded: nothing was printed, the error goes to the caller and the log, and a
+  looping non-admin caller cannot flush the ring with instant failures. Failures before the first raster
+  write from `print_bitmap`, reprints and the button (admin or physical actions) are recorded. A reprint
+  of a `delivery_uncertain` entry warns that the first copy may have printed.
 - Admin-only services, all registered with `async_register_admin_service`: `history_list` (`limit` default
   50, `offset`; `SupportsResponse.ONLY`; returns entries without `bitmap_z` and `recipe`, with `thumb` and
-  the booleans `has_recipe` and `reprintable` that drive the drawer's buttons),
+  the booleans `has_recipe` and `reprintable` (the blob still exists) that drive the drawer's buttons),
   `history_get` (`SupportsResponse.ONLY`; one entry with `recipe` and `bitmap_z`), `history_delete`,
   `history_clear`, and `history_reprint` (`device_id`, `id`; prints the stored bitmap, never re-renders;
   decompresses with an output bound of `2048 * 48 + 1` bytes and re-validates `rows` and the decoded
@@ -283,8 +301,10 @@ filled):
   validation, bundled font hash check.
 - Golden parity test: the expected Python line breaks and block geometry for each template with
   `columns = 1` are committed as `tests/fixtures/layout_cases.json`, regenerated only by
-  `tools/gen_layout_cases.py` (run in the HA-image job, which requires libraqm; without it Pillow lays
-  out differently); a pytest only compares and fails on drift. The Playwright
+  `tools/gen_layout_cases.py`. The generator and the compare pytest (`tests/test_ha_layout_parity.py`, so
+  the existing `test_ha*.py` discovery in the `home-assistant` Docker-image job runs it) both assert
+  `features.check_feature("raqm")`, because without libraqm Pillow lays out differently; the pytest only
+  compares and fails on drift. The Playwright
   browser job (Chromium and Firefox, installed explicitly) compares the browser result with that file
   (offset tolerance 1 px). Lines within 1 px of the wrap width are asserted separately. For columns 2 and 3
   the browser test asserts invariants: no line wider than its column, tallest column minimal, checklist
@@ -315,7 +335,7 @@ filled):
 | JS and Python layouts diverge | Golden parity test in CI. |
 | `.storage` growth | 200 entries and 5 MiB caps, enforced on write. |
 | Slow mobile devices | Latest-wins coalescing per frame; measure on a phone during acceptance. |
-| Phone engines untested (iOS Safari, HA Companion app; voice-dictating users likely use a phone) | First plan task, before any panel work: run the spike recipe on the user's phone and in the Companion app. `OffscreenCanvas` needs iOS 16.4 or later, so the renderer uses a detached `HTMLCanvasElement` when it is absent (spike: bits identical across canvas kinds). Check that single-value `FontFace` `stretch` and `weight` descriptors change glyph widths on the phone. If they do not, fall back to the fontkit outline path (spike: works in all three engines, 0.67 MB). |
+| Phone engines untested (iOS Safari, HA Companion app; voice-dictating users likely use a phone) | First plan task, before any panel work: run the spike recipe on the user's phone and in the Companion app. `OffscreenCanvas` needs iOS 16.4 or later, so the renderer uses a detached `HTMLCanvasElement` when it is absent (spike: bits identical across canvas kinds). Check that single-value `FontFace` `stretch` and `weight` descriptors change glyph widths on the phone. If they do not, stop and re-plan with the user: the outline-rasteriser path measured in the spike (fontkit, works in all three engines, 0.67 MB) is the candidate but is outside this design (see Non-goals). |
 
 ## Acceptance
 

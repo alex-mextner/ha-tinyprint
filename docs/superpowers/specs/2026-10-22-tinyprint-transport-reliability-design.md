@@ -113,8 +113,8 @@ failing phase.
   scanning while it connects are read from habluetooth source and not exercised on the device; the plan
   verifies them on the odroid with the printer switched off.]
 - Option `wait_for_printer_seconds` (same name in the options flow and in YAML), whole seconds, 0-300,
-  default 60. `0` keeps today's behaviour exactly: the existing "listed" check, fail-fast, same error code
-  and message as before. Configured in
+  default 60. `0` skips both wait entries and keeps today's behaviour exactly: the existing "listed" check,
+  fail-fast, same error code and message as before (a test covers it, including a failed connect). Configured in
   the options flow next to `proxy_source`; the YAML import maps it like `proxy_source`. Raising the
   default from today's instant failure means a job for an absent printer holds the printer lock for up to
   60 s, during which other jobs get "Printer is busy".
@@ -132,11 +132,13 @@ failing phase.
   `last_result` on every phase transition and updates the job sensor state; the sensor already exposes
   `last_result` as attributes (`sensor.py:27-34`) and its status reaches the entity by dispatcher
   (`runtime.py:87-89`). The panel reads the sensor through `hass.states[entity_id]` (introduced by the
-  Studio spec for the in-flight check), computes the remaining seconds as `waiting_until` minus the state's
-  `last_updated` (both server clock), and counts down locally from the moment the state arrives. It shows
+  Studio spec for the in-flight check), and shows the remaining seconds as the smaller of two estimates,
+  clamped to 0..`wait_for_printer_seconds`: `waiting_until` minus the state's `last_updated` counted down
+  from the moment the state arrived, and `waiting_until` minus `Date.now()`; the second one keeps a panel
+  opened mid-wait from showing the full wait again, and browser clock skew can only shorten the label. It shows
   "Printer not seen: switch it on, printing starts automatically (N s left)". Automations get the same
   state for free. `TinyPrintJobSensor` has a fixed enum (`_attr_options`, `sensor.py:16`); add
-  `waiting_for_printer` to it and to the translations.
+  `waiting_for_printer` to it, to `IN_FLIGHT_STATES` (defined by the Studio spec) and to the translations.
 - Scope: the `proxy` transport (the deployed one). Native, bridge and `local_le` keep their behaviour
   unless the plan finds the same helper applies without extra risk.
 
@@ -144,7 +146,7 @@ failing phase.
 
 Reference bitmap: a fixed packed fixture (`tests/fixtures/reference_247.bin`, 247 rows, SHA-256 recorded in
 the experiment doc) rendered once from the label of the 10-21 08:03 job (the original bytes were not
-kept; this is a stand-in with the same row count), printed through `print_bitmap` in every run. Each experiment: at least 5 runs, one variable
+kept; a stand-in with the same row count, not comparable to the evidence rows), printed through `print_bitmap` in every run. Each experiment: at least 5 runs, one variable
 changed, medians from the timeline, every output photographed; a change is adopted only if the median total
 improves and the print has no visible defect (squeezed or dropped rows, swallowed last line).
 
