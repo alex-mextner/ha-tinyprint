@@ -58,11 +58,13 @@ def test_raster_started_stays_false_when_the_precheck_write_fails():
         asyncio.run(t.send_bitmap(FakeClient(fail_at=0), bytes(48), 1, progress=progress, **KW))
     assert progress.get("raster_started", False) is False
 
+
 def test_raster_started_is_true_when_the_first_stream_write_raises():
     progress = {}
     with pytest.raises(RuntimeError):
         asyncio.run(t.send_bitmap(FakeClient(fail_at=1), bytes(48), 1, progress=progress, **KW))
     assert progress["raster_started"] is True
+
 
 def test_a_fault_before_the_job_means_no_raster_started():
     progress = {}
@@ -71,6 +73,7 @@ def test_a_fault_before_the_job_means_no_raster_started():
         asyncio.run(t.send_bitmap(client, bytes(48), 1, progress=progress, **KW))
     assert progress.get("raster_started") is not True
     assert client.writes == [GET_STATE]  # a raising call returns no stats; the wire shows no raster
+
 
 def test_successful_send_reports_raster_started_in_stats():
     progress = {}
@@ -103,14 +106,16 @@ In `tests/test_bridge_client.py` (use its scripted fake bridge; `run(bridge)` re
 def test_ink_percent_is_computed_from_the_packed_bits():
     assert r.ink_percent(b"\xff" * 48, 1) == 100.0
     assert r.ink_percent(bytes(48), 1) == 0.0
-    assert r.ink_percent(b"\x80" + bytes(95), 2) == round(100 / 768, 2)   # one dot in 2 rows
+    assert r.ink_percent(b"\x80" + bytes(95), 2) == round(100 / 768, 2)  # one dot in 2 rows
+
 
 def test_thumbnail_is_96_wide_and_keeps_the_ink():
-    data = bytes(48 * 10) + b"\xff" * (48 * 10)       # 10 blank rows, then 10 solid rows
+    data = bytes(48 * 10) + b"\xff" * (48 * 10)  # 10 blank rows, then 10 solid rows
     png = Image.open(io.BytesIO(r.thumbnail_png(data, 20)))
     assert png.size == (96, 5)
-    assert png.convert("L").getpixel((10, 0)) == 255     # blank rows stay white
-    assert png.convert("L").getpixel((10, 4)) == 0       # solid ink stays black
+    assert png.convert("L").getpixel((10, 0)) == 255  # blank rows stay white
+    assert png.convert("L").getpixel((10, 4)) == 0  # solid ink stays black
+
 
 def test_thumbnail_of_a_tall_bitmap_keeps_the_aspect_ratio():
     assert Image.open(io.BytesIO(r.thumbnail_png(bytes(48 * 2048), 2048))).size == (96, 512)
