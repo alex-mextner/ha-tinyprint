@@ -183,8 +183,9 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
     async def test_printer_info_returns_job_sensor_entity_id_and_in_flight_states(self):
         dev_registry, ent_registry = self._info_with_entity_registry("sensor.test_print_job")
         result = await self._call_printer_info(dev_registry, ent_registry)
+        sensor = TinyPrintJobSensor(SimpleNamespace(address="AA:BB:CC:DD:EE:FF", name="Test"))
         ent_registry.async_get_entity_id.assert_called_once_with(
-            "sensor", "tinyprint", "AA:BB:CC:DD:EE:FF_job_status"
+            "sensor", "tinyprint", sensor.unique_id
         )
         self.assertEqual(result["printers"][0]["entity_id"], "sensor.test_print_job")
         self.assertEqual(result["in_flight_states"], sorted(IN_FLIGHT_STATES))

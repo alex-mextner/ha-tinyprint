@@ -16,7 +16,7 @@ from homeassistant.helpers.service import async_register_admin_service
 
 from .const import DOMAIN
 from .diagnostics import transport_info
-from .sensor import IN_FLIGHT_STATES
+from .sensor import IN_FLIGHT_STATES, job_sensor_unique_id
 from .studio_render import PRESETS, TEMPLATES, preview_result, render_document
 
 DATA_KEY = "tinyprint_studio"
@@ -115,7 +115,7 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
                 {
                     "device_id": device.id if device else None,
                     "entity_id": entity_registry.async_get_entity_id(
-                        "sensor", DOMAIN, f"{printer.address}_job_status"
+                        "sensor", DOMAIN, job_sensor_unique_id(printer.address)
                     ),
                     "name": printer.name,
                     "status": printer.status,
