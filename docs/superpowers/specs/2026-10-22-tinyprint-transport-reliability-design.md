@@ -97,9 +97,12 @@ failing phase.
   prefers for that address, so a stronger second scanner would hide the pinned proxy and the wait would
   time out with the printer on.
 - One deadline per job: `deadline = monotonic() + wait_for_printer_seconds`, computed once when the job
-  starts, and one helper `wait_until_fresh(scanner, address, newer_than, deadline)` used from both entry
-  points below (`newer_than` is a monotonic timestamp: now minus `ADVERT_FRESH_SECONDS` for entry 1, the
-  start of the failed connect for entry 2). The wait runs before `self.connection()`
+  starts, and one helper `wait_until_fresh(find_scanner, address, newer_than, deadline)` used from both entry
+  points below. `find_scanner` is a callable that resolves the pinned scanner on every poll, not a scanner
+  object: `bleak_esphome` builds a new `ESPHomeScanner` on every proxy reconnect, so a held object would go
+  stale and the wait could never see the printer again. `newer_than` is a monotonic timestamp: now minus
+  `ADVERT_FRESH_SECONDS` for entry 1, the start of the failed connect for entry 2. The wait runs before
+  `self.connection()`
   (`studio_runtime.py:200`) so it is not inside the 45 s `CONNECT_DEADLINE` (`connection.py:10`).
   Entry 1: no fresh advertisement at job start. Entry 2: all connect attempts failed (or
   `proxy_client.py` raised its "not visible" error between attempts) and no advertisement newer than the
