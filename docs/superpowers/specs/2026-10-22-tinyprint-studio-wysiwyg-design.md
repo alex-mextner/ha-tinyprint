@@ -248,7 +248,9 @@ filled):
   transport spec: the first raster (print data) write call; status queries and the notification setup do
   not count, and a raster write that raises counts as attempted. `send_bitmap` sets a `raster_started`
   flag just before the first raster write; for a bridge job the HA side derives it as `bytes_written`
-  greater than the length of the leading state request (the bridge wire format is unchanged). Status
+  greater than the length of the leading state request, or when `delivery_uncertain` is set (a lost
+  answer to the start request leaves `bytes_written` at 0 while the bridge may already be printing, and
+  the bridge docs call that case `delivery_uncertain`); the bridge wire format is unchanged. Status
   precedence: no raster write and the job was cancelled is `cancelled`; no raster write otherwise is
   `failed`; any failure, cancel or printer fault after the first raster write call is
   `delivery_uncertain`; `sent` when the job ended successfully (`send_bitmap` returns only after the
@@ -314,8 +316,10 @@ filled):
   `history_*` service is rejected.
 - The six new services get `services.yaml` entries and `strings.json` / `translations/{en,ru}.json` text.
 - Bump the version together everywhere it appears: `PANEL_VERSION` (`studio.py:21`), `manifest.json:32`,
-  `diagnostics.py:15`, `README.md:15`, `tests/browser_studio.py:47` and `tests/test_ha_bridge.py:400-406`
-  (currently 0.2.2; this change is 0.3.0).
+  `diagnostics.py:15`, `tests/browser_studio.py:47` and `tests/test_ha_bridge.py:400-406` (currently
+  0.2.2; this change is 0.3.0), plus the README: line 15 (`## Direct local LE (0.2.2)`) is the label of
+  the release that introduced the feature, not the version, so it becomes `(since 0.2.2)` and a
+  `Current version:` line under the title is added; every later release bumps that line.
 
 ## Non-goals
 
