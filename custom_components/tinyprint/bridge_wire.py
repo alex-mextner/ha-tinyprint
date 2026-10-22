@@ -10,7 +10,6 @@ sizes are bounded before any decoding.
 """
 
 import base64
-import binascii
 import json
 import math
 import re
@@ -18,14 +17,13 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from .protocol import MAX_ROWS, ROW_BYTES
+from .bitmap import BitmapError, check_rows, decode_bitmap_b64
+from .protocol import ROW_BYTES
 
 API_PREFIX = "/v1"
 MAX_BODY_BYTES = 256 * 1024
 MIN_TOKEN_LENGTH = 32
 PROTOCOL_VERSION = 1
-MAX_BITMAP_BYTES = MAX_ROWS * ROW_BYTES
-MAX_BITMAP_B64_LENGTH = 4 * ((MAX_BITMAP_BYTES + 2) // 3)
 MAX_DIAGNOSIS_JSON = 32 * 1024
 MAX_COUNTER = 10**12
 
@@ -94,13 +92,6 @@ def validate_job_id(value: object) -> str:
     return value
 
 
-def _check_rows(value: object) -> int:
-    # bool is an int subclass; True must not become one row.
-    if type(value) is not int or not 1 <= value <= MAX_ROWS:
-        raise _bad(f"rows must be an integer from 1 to {MAX_ROWS}")
-    return value
-
-
 def _check_keys(data: object, keys: set[str]) -> dict[str, Any]:
     if not isinstance(data, dict) or set(data) != keys:
         raise _bad("Request body must be an object with exactly the documented fields")
@@ -110,16 +101,11 @@ def _check_keys(data: object, keys: set[str]) -> dict[str, Any]:
 def parse_print_request(data: object) -> PrintRequest:
     data = _check_keys(data, {"job_id", "rows", "bitmap_b64"})
     job_id = validate_job_id(data["job_id"])
-    rows = _check_rows(data["rows"])
-    encoded = data["bitmap_b64"]
-    if not isinstance(encoded, str) or len(encoded) > MAX_BITMAP_B64_LENGTH:
-        raise _bad("bitmap_b64 must be a base64 string within the size limit")
     try:
-        bitmap = base64.b64decode(encoded, validate=True)
-    except binascii.Error, ValueError:
-        raise _bad("bitmap_b64 is not valid base64") from None
-    if len(bitmap) != rows * ROW_BYTES:
-        raise _bad("bitmap size does not match rows")
+        rows = check_rows(data["rows"])
+        bitmap = decode_bitmap_b64(rows, data["bitmap_b64"])
+    except BitmapError as err:
+        raise _bad(str(err)) from None
     return PrintRequest(job_id, rows, bitmap)
 
 
@@ -130,7 +116,10 @@ def parse_diagnose_request(data: object) -> str:
 def print_request_body(job_id: str, bitmap: bytes, rows: int) -> dict[str, Any]:
     """Client side: run the server's validation locally, then encode."""
     validate_job_id(job_id)
-    _check_rows(rows)
+    try:
+        check_rows(rows)
+    except BitmapError as err:
+        raise _bad(str(err)) from None
     if not isinstance(bitmap, bytes | bytearray | memoryview) or len(bitmap) != rows * ROW_BYTES:
         raise _bad("bitmap size does not match rows")
     return {

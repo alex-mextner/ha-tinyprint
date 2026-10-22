@@ -9,6 +9,7 @@ from shared_loader import load
 
 w = load("bridge_wire")
 protocol = load("protocol")
+bitmap_module = load("bitmap")
 
 GOOD_ID = "job-12345678"
 
@@ -129,7 +130,7 @@ def test_oversized_bitmap_rejected_before_decoding(monkeypatch):
 
     monkeypatch.setattr(w.base64, "b64decode", forbidden)
     with pytest.raises(w.WireError):
-        w.parse_print_request(body(bitmap_b64="A" * (w.MAX_BITMAP_B64_LENGTH + 4)))
+        w.parse_print_request(body(bitmap_b64="A" * (bitmap_module.MAX_BITMAP_B64_LENGTH + 4)))
 
 
 @pytest.mark.parametrize(
@@ -298,4 +299,4 @@ def test_parse_job_view_does_not_mutate_input():
 
 
 def test_bitmap_limit_matches_protocol():
-    assert w.MAX_BITMAP_BYTES == protocol.MAX_ROWS * protocol.ROW_BYTES
+    assert bitmap_module.MAX_BITMAP_BYTES == protocol.MAX_ROWS * protocol.ROW_BYTES

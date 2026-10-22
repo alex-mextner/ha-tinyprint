@@ -17,7 +17,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
       - run: >-
           python -m pytest tests/test_core.py tests/test_transport.py tests/test_studio_render.py
-          tests/test_frame_counter.py tests/test_bridge_wire.py tests/test_att.py
+          tests/test_frame_counter.py tests/test_bitmap.py tests/test_bridge_wire.py tests/test_att.py
           tests/test_bridge_config.py tests/test_bridge_link.py tests/test_bridge_jobs.py
           tests/test_bridge_server.py tests/test_bridge_installer.py tests/test_bridge_client.py
           tests/test_local_le.py -q
