@@ -29,10 +29,12 @@
 | --- | --- | --- |
 | `IN_FLIGHT_STATES`, `SETTLED_STATES` in `sensor.py`, `printer_info` per-printer `entity_id` and top-level `in_flight_states` | Plan 1 | Task 9 adds `waiting_for_printer` |
 | Panel modules `studio/status.js` (`STATUS_TEXT`, `statusText(stateObj)`), shell `tinyprint-panel.js` (`jobState(deviceId)`, `#job-status`) | Plan 1 | Task 11 |
-| `send_bitmap(..., progress: dict \| None = None)`, `last_result["raster_started"]`, `_async_print_job` wrapper that records history after `phase("sent")`/`failed()` and reads `last_result.get("timings")` | Plan 2 | Tasks 3-4 add a separate `timeline` keyword next to `progress`, finalise `timings` inside `phase()`/`failed()` |
+| `send_bitmap(..., progress: dict \| None = None)`, `last_result["raster_started"]`; `StudioPrinter._async_print_job(kind, payload, font_size, source)` = thin recording wrapper that records history after `phase("sent")`/`failed()` and reads `last_result.get("timings")`; `StudioPrinter._print_job(kind, payload, font_size)` = the former `_async_print_job` body (render, connect, `send_bitmap`, `phase`/`failed`) | Plan 2 | Tasks 3-4 and 10 edit `_print_job` only and never the wrapper; Task 3 adds a separate `timeline` keyword next to `progress` (decision below); Task 4 finalises `timings` inside `phase()`/`failed()` |
 | `docs/CHANGELOG.md` | Plan 1 | Task 15 appends 0.3.2 |
 
-If a name above is missing in the checkout, find the responsibility by role (grep for the symbol), do not re-create it.
+If a name above is missing in the checkout, find the responsibility by role (grep for the symbol), do not re-create it. Anywhere below that says "the print body" means `StudioPrinter._print_job`.
+
+**Decision (two out-parameters on `send_bitmap`):** Plan 2's `progress` dict (owns `raster_started`, also used by `local_le`, which has no timeline) and this plan's `timeline` are kept as two optional keywords. Merging would force Plan 2 to define a class this plan owns, or this plan to rewrite Plan 2's call sites and tests, for no behavioural gain. Rule: `raster_started` is assigned only by Plan 2's line; this plan's `enter("transmit")` goes on the next line and never sets the flag.
 
 ## Review Focus
 
@@ -123,7 +125,7 @@ class JobTimeline:
 **Files:** `custom_components/tinyprint/transport.py` (`send_bitmap`, `notification` handler); `custom_components/tinyprint/proxy_client.py` (`connect_via_proxy`); tests `tests/test_transport.py` (pure), `tests/test_ha_proxy_client.py` (HA).
 
 **Interfaces:**
-- Consumes: `JobTimeline` (Task 2); Plan 2's `progress` keyword and its `raster_started` assignment (place the `enter("transmit")` call right next to it; do not duplicate the flag).
+- Consumes: `JobTimeline` (Task 2); Plan 2's `progress` keyword and its `raster_started` assignment (place the `enter("transmit")` call right after it; never set the flag here).
 - Produces: `send_bitmap(..., progress=..., timeline: JobTimeline | None = None)`; `connect_via_proxy(hass, address, name, source, timeline: JobTimeline | None = None)`.
 - Marks in `send_bitmap` (all guarded by `timeline is not None`): after `start_notify` returns -> `enter(None)` (ends `notify`; precheck round trip is a gap, not a phase); immediately before the first raster write -> `enter("transmit")`; right after the raster packet loop ends -> `enter("printer_wait")` (a trailing flow pause counts there); on success return -> `enter(None)`. In the notification handler mirror `timeline.flow_pauses = stats["flow_pauses"]` and, on every A3 reply, `timeline.printer_state = conditions` (so a failure keeps them). In `connect_via_proxy`: call `timeline.attempt(found.scanner.name)` before each `client.connect()` (the name already logged there; never `source`).
 
@@ -142,12 +144,12 @@ class JobTimeline:
 
 ### Task 4: Timeline lifecycle, `timings` in `last_result`, the INFO line
 
-**Files:** `custom_components/tinyprint/studio_runtime.py` (`begin`, `phase`, `failed`, `connection`, `_async_print_job` body, `_diagnose`); test `tests/test_ha_proxy_wait.py` (create; HA); touch `tests/test_ha_proxy_client.py` as noted.
+**Files:** `custom_components/tinyprint/studio_runtime.py` (`begin`, `phase`, `failed`, `connection`, `_print_job` body, `_diagnose`; the `_async_print_job` recording wrapper is Plan 2's and stays untouched); test `tests/test_ha_proxy_wait.py` (create; HA); touch `tests/test_ha_proxy_client.py` as noted.
 
 **Interfaces:**
 - Produces: `StudioPrinter.timeline: JobTimeline` (created in `begin()` with `clock=self.clock.now` once Task 5/10 add `clock`; until then `time.monotonic`); `last_result["timings"]` (the dict of `as_dict()`) written exactly once per job by `_finish_timings(outcome: str)`; one INFO line `tinyprint job timings <log_fields>` on logger `custom_components.tinyprint.studio_runtime`.
 - `_finish_timings` is called from `phase()` when `phase in ("sent", "diagnosed")` (outcome = that phase) and from `failed(error)` (outcome `cancelled` for `asyncio.CancelledError`, else `failed`); idempotent. Before `finish()` it copies `bytes_written` and `writes` from `last_result`, `rows` from the render result (set `self.timeline.rows = height` right after rendering), `flow_pauses` from the timeline (or `last_result.get("flow_pauses")` for bridge/local_le), and, on success, `printer_state` from `last_result["printer_state"]` when the timeline has none. It runs BEFORE Plan 2's history recording because `phase("sent")`/`failed()` run before it.
-- `connection()` passes `self.timeline` as the 5th argument of `connect_via_proxy`. In the print body: `self.timeline.enter("connect")` before `async with self.connection()` and `self.timeline.enter("notify")` as the first statement inside; `send_bitmap(..., timeline=self.timeline)`. `_diagnose` gets no phase marks (total only).
+- `connection()` passes `self.timeline` as the 5th argument of `connect_via_proxy`. In `_print_job`: `self.timeline.enter("connect")` before `async with self.connection()` and `self.timeline.enter("notify")` as the first statement inside; `send_bitmap(..., timeline=self.timeline)`. `_diagnose` gets no phase marks (total only).
 
 - [ ] **Step 1: Write failing tests** (HA; patch `_render`, `send_bitmap`/`establish_connection` the way `test_configured_tail_rows_reach_the_transport` does; native transport is enough):
   - `test_success_has_a_timeline_in_last_result_and_one_info_line`: `last_result["timings"]` has exactly the 13 keys of `as_dict()`, `rows == 1`, `bytes == last_result["bytes_written"]`, `total >= connect + notify`; `assertLogs(..., "INFO")` contains exactly one line starting `tinyprint job timings` containing `outcome=sent`.
@@ -182,7 +184,7 @@ async def wait_until_fresh(find_scanner: Callable[[], object | None], address: s
 def not_seen_message(seconds: int) -> str                  # contains f"{seconds} s", "switch", "closer", "phone"
 ```
 - `wait_until_fresh`: loop { check `is_fresh(find_scanner(), ...)` -> `True`; `remaining = deadline - clock.now()`; `<= 0` -> `False`; `await clock.sleep(min(POLL_SECONDS, remaining))` }. The check precedes the deadline test, so an advertisement on the last tick counts.
-- **Deviation from the spec text** (`wait_until_fresh(scanner, ...)`): the first argument is a scanner *resolver*, called every poll. Reason: `bleak_esphome/connect.py:89` builds a new `ESPHomeScanner` on every proxy reconnect, so a held scanner object would go stale and never see the printer again; the resolver is also what makes "absent during a wait keeps waiting" true.
+- **Spec amended** (commit `docs: transport spec passes a scanner resolver to wait_until_fresh`): the spec's `wait_until_fresh` now also takes a scanner *resolver*, called every poll. Reason: `bleak_esphome/connect.py:89` builds a new `ESPHomeScanner` on every proxy reconnect, so a held scanner object would go stale and never see the printer again; the resolver is also what makes "absent during a wait keeps waiting" true.
 - The timestamps come from habluetooth's `monotonic_time_coarse()` (same CLOCK_MONOTONIC base on Linux, coarse resolution); a few milliseconds of skew against `time.monotonic()` is accepted.
 - `tests/wait_fake.py` (test utility): `FakeClock(start=1000.0)` with `now()`, `async sleep(s)` (advances `t`, fires due scheduled actions in order, then `await asyncio.sleep(0)`), `at(offset, action)`; `FakeScanner(source, name="proxy", timestamps=None, connector=object())` whose `discovered_device_timestamps` property returns a copy of its dict.
 
@@ -263,7 +265,7 @@ Ask the user for: a long-lived HA token exported as `HA_TOKEN` for the session (
 
 ### Task 10: Waiting for the printer in the job layer
 
-**Files:** `studio_runtime.py` (`StudioPrinter`: `clock`, `begin`, `_print_connection`, wait helpers, `PrinterNotSeenError`, print body, `PROXY_ABSENT_MESSAGE`); tests `tests/test_ha_proxy_wait.py`.
+**Files:** `studio_runtime.py` (`StudioPrinter`: `clock`, `begin`, `_print_connection`, wait helpers, `PrinterNotSeenError`, `_print_job`, `PROXY_ABSENT_MESSAGE`); tests `tests/test_ha_proxy_wait.py`.
 
 **Interfaces:**
 - Consumes: `waiting.py` (Task 5), `timeline` (Tasks 2-4), option (Task 8), `proxy_client` "not visible" error.
@@ -404,7 +406,7 @@ Each one only on the user's explicit go for that ID; a skipped one is written do
 
 Before value: `0.3.1` (Plan 2); after: `0.3.2`.
 
-**Files:** `studio.py` (`PANEL_VERSION`), `manifest.json`, `diagnostics.py`, `README.md` (the version in the local-LE heading line / wherever Plan 1 left the single version mention), `tests/browser_studio.py` (mock `printer_info` `version`), `tests/test_ha_bridge.py` (`test_component_versions_match_release`: three assertions), `docs/CHANGELOG.md` (created by Plan 1; append).
+**Files:** `studio.py` (`PANEL_VERSION`), `manifest.json`, `diagnostics.py`, `README.md` (the `Current version:` line under the title that Plan 1 added; the `Direct local LE (since 0.2.2)` heading is a feature label and stays), `tests/browser_studio.py` (mock `printer_info` `version`), `tests/test_ha_bridge.py` (`test_component_versions_match_release`: three assertions), `docs/CHANGELOG.md` (created by Plan 1; append).
 
 - [ ] **Step 1:** change the existing assertions in `test_component_versions_match_release` and the browser mock to `0.3.2` first; run that test -> FAIL (red for the right reason).
 - [ ] **Step 2:** bump all six sites. **Step 3:** CHANGELOG `0.3.2`: job timeline in `last_result.timings` and an INFO line; waiting for the printer (proxy only), option `wait_for_printer_seconds` default 60 (`0` restores the old fail-fast behaviour); new sensor state `waiting_for_printer` (automations that match sensor states need it; the sensor attribute `last_result` gains `waiting_until`, `error_code`, `timings`); new error `printer_not_seen`; a raised default wait means a job for an absent printer holds the printer lock for up to the wait plus connect time. Link `docs/transport-experiments.md` and state which of E0-E7 ran.
