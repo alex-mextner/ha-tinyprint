@@ -43,6 +43,7 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
             "printer_info",
             "diagnose",
             "cancel",
+            "print_bitmap",
         ):
             self.assertTrue(self.hass.services.has_service("tinyprint", action), action)
 
@@ -334,6 +335,107 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(printer.last_result["bytes_written"], 0)
         self.assertNotIn("PRIVATE CONTENT", "\n".join(logs.output))
         self.assertEqual(printer.status, "error")
+
+    async def _call_print_bitmap(self, printer, data):
+        self.hass.data["tinyprint"] = {"one": printer}
+        registry = MagicMock()
+        registry.async_get.return_value = SimpleNamespace(config_entries={"one"})
+        with patch("custom_components.tinyprint.studio.dr.async_get", return_value=registry):
+            return await self.hass.services.async_call(
+                "tinyprint",
+                "print_bitmap",
+                {"device_id": "chosen", **data},
+                blocking=True,
+                return_response=True,
+            )
+
+    async def test_print_bitmap_rejects_each_invalid_input_before_printing(self):
+        from custom_components.tinyprint.bitmap import MAX_BITMAP_B64_LENGTH
+
+        def b64(size):
+            return base64.b64encode(bytes(size)).decode()
+
+        cases = {
+            "rows true": {"rows": True, "bitmap_b64": b64(48)},
+            "rows zero": {"rows": 0, "bitmap_b64": b64(48)},
+            "rows too large": {"rows": 2049, "bitmap_b64": b64(48)},
+            "rows string": {"rows": "1", "bitmap_b64": b64(48)},
+            "invalid base64": {"rows": 1, "bitmap_b64": "!!!!"},
+            "oversized base64": {"rows": 1, "bitmap_b64": "A" * (MAX_BITMAP_B64_LENGTH + 4)},
+            "too short": {"rows": 1, "bitmap_b64": b64(47)},
+            "too long": {"rows": 1, "bitmap_b64": b64(49)},
+        }
+        printer = SimpleNamespace(async_print=AsyncMock())
+        for name, data in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(ServiceValidationError):
+                    await self._call_print_bitmap(printer, data)
+                printer.async_print.assert_not_awaited()
+
+    async def test_print_bitmap_prints_exact_bytes_and_returns_server_hash(self):
+        import hashlib
+
+        data = bytes(range(96))
+        printer = SimpleNamespace(async_print=AsyncMock(return_value={"phase": "sent"}))
+        result = await self._call_print_bitmap(
+            printer, {"rows": 2, "bitmap_b64": base64.b64encode(data).decode()}
+        )
+        printer.async_print.assert_awaited_once_with("bitmap", {"rows": 2, "bitmap": data}, 24)
+        self.assertEqual(result["phase"], "sent")
+        self.assertEqual(result["bitmap_sha256"], hashlib.sha256(data).hexdigest())
+
+    async def test_print_bitmap_requires_admin(self):
+        from homeassistant.core import Context
+        from homeassistant.exceptions import Unauthorized
+
+        printer = SimpleNamespace(async_print=AsyncMock())
+        self.hass.data["tinyprint"] = {"one": printer}
+        auth = SimpleNamespace(
+            async_get_user=AsyncMock(return_value=SimpleNamespace(is_admin=False))
+        )
+        with patch.object(self.hass, "auth", auth, create=True):
+            with self.assertRaises(Unauthorized):
+                await self.hass.services.async_call(
+                    "tinyprint",
+                    "print_bitmap",
+                    {
+                        "device_id": "chosen",
+                        "rows": 1,
+                        "bitmap_b64": base64.b64encode(bytes(48)).decode(),
+                    },
+                    blocking=True,
+                    return_response=True,
+                    context=Context(user_id="nonadmin"),
+                )
+        printer.async_print.assert_not_awaited()
+
+    async def test_studio_printer_render_bitmap_returns_payload_unchanged(self):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None)
+        data = bytes(range(144))
+        self.assertEqual(printer._render("bitmap", {"rows": 3, "bitmap": data}, 24), (data, 3))
+
+    async def test_print_bitmap_bytes_reach_the_transport_unchanged(self):
+        from custom_components.tinyprint.studio_runtime import StudioPrinter
+
+        printer = StudioPrinter(self.hass, "one", "AA:BB:CC:DD:EE:FF", "Test", None)
+        data = bytes(range(96))
+        client = SimpleNamespace(is_connected=True, disconnect=AsyncMock())
+        transmit = AsyncMock(return_value={"confirmation": "transport_only"})
+        with (
+            patch(
+                "custom_components.tinyprint.studio_runtime.bluetooth.async_ble_device_from_address",
+                return_value=object(),
+            ),
+            patch(
+                "custom_components.tinyprint.studio_runtime.establish_connection",
+                new=AsyncMock(return_value=client),
+            ),
+            patch("custom_components.tinyprint.studio_runtime.send_bitmap", new=transmit),
+        ):
+            await printer.async_print("bitmap", {"rows": 2, "bitmap": data}, 24)
+        self.assertEqual(transmit.await_args.args[1:3], (data, 2))
 
     async def test_configured_tail_rows_reach_the_transport(self):
         from custom_components.tinyprint.studio_runtime import StudioPrinter

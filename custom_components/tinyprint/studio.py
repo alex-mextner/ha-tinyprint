@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.service import async_register_admin_service
 
+from .bitmap import BitmapError, decode_bitmap_b64
 from .const import DOMAIN
 from .diagnostics import transport_info
 from .sensor import IN_FLIGHT_STATES, job_sensor_unique_id
@@ -98,6 +100,18 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
         )
         return result if call.return_response else None
 
+    async def print_bitmap(call: ServiceCall) -> dict[str, Any] | None:
+        printer = _printer(hass, call.data["device_id"])
+        rows = call.data["rows"]
+        try:
+            bitmap = decode_bitmap_b64(rows, call.data["bitmap_b64"])
+        except BitmapError as error:
+            raise ServiceValidationError(str(error)) from error
+        result = await printer.async_print("bitmap", {"rows": rows, "bitmap": bitmap}, 24)
+        if not call.return_response:
+            return None
+        return {**result, "bitmap_sha256": hashlib.sha256(bitmap).hexdigest()}
+
     async def printer_info(call: ServiceCall) -> dict[str, Any]:
         registry = dr.async_get(hass)
         entity_registry = er.async_get(hass)
@@ -157,6 +171,12 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             preview,
             {vol.Required("document"): dict, vol.Optional("device_id"): str},
             SupportsResponse.ONLY,
+        ),
+        (
+            "print_bitmap",
+            print_bitmap,
+            target | {vol.Required("rows"): object, vol.Required("bitmap_b64"): object},
+            SupportsResponse.OPTIONAL,
         ),
         (
             "print_document",

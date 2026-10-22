@@ -117,6 +117,24 @@
         }
       }
     },
+    "print_bitmap": {
+      "name": "Print bitmap",
+      "description": "Print a ready 1-bit bitmap, 384 dots wide (48 bytes per row). Administrators and trusted automations only.",
+      "fields": {
+        "device_id": {
+          "name": "Printer",
+          "description": "The TinyPrint printer to print on."
+        },
+        "rows": {
+          "name": "Rows",
+          "description": "Number of rows, 1 to 2048."
+        },
+        "bitmap_b64": {
+          "name": "Bitmap",
+          "description": "Standard base64 of exactly 48 bytes per row."
+        }
+      }
+    },
     "print_image": {
       "name": "Print image",
       "description": "Print a local image from an allowed Home Assistant path. Remote URLs are not accepted.",
