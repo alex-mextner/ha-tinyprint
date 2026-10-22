@@ -7,7 +7,7 @@ Status: design approved in conversation 2026-10-22; written spec awaiting review
 
 The user reports the mini printer is slow to be found, prints slowly and sometimes is not found at all.
 Deployment (verified in the odroid HA log, 2026-10-22): `proxy` transport through ESPHome proxy
-`btproxy-kitchen` (30:C9:22:D1:A5:72), which also serves the Xiaomi kettle integration. The
+`btproxy-kitchen` (MAC omitted on purpose), which also serves the Xiaomi kettle integration. The
 `ha-tinyprint-config/packages/tinyprint.yaml` copy on the laptop still says `local_le` and is stale.
 
 ### Evidence
@@ -34,7 +34,9 @@ Deployment (verified in the odroid HA log, 2026-10-22): `proxy` transport throug
   is longer than that because it also contains the printer consuming rows. The rest is connect and that
   consumption. The logged byte totals (8,007 B and 18,376 B, about 143 and 328 frames of 56 B) imply
   roughly 13-24 rows/s over the `Transmit` column [INFERENCE: the logged byte totals are not multiples of
-  56, so the plan reconciles bytes to rows before any rate is quoted or stored in the experiment doc].
+  56, and 247 rows plus the 96-row tail at 56 B is about 19.2 KB, more than the 18,376 B logged for the
+  10-21 08:03 job, so its row count is unreconciled; the plan reconciles bytes to rows before any rate is
+  quoted or stored in the experiment doc].
   Totals seen: 13-33 s.
 - The 12:20:34 failure and the 12:19:46 slow connect both followed kettle activity on the same proxy
   (kettle reconnect 12:21:17-22; kettle write 12:19:00) [INFERENCE: contention, unproven]. The proxy has 3
@@ -73,7 +75,9 @@ writes is inside it), `printer_wait` (last write to idle A3 reply) and `total`, 
 matching how `proxy_client.py` logs the proxy). The new `transmit` excludes only the consumption after
 the last write, so E0 numbers are not comparable to the `Transmit` column of the evidence table. There is
 no lock-wait field: a second job for a busy printer is rejected at once (`runtime.py:112-113`), not
-queued. A test asserts that `total` is at least the sum of the phases. The object goes to
+queued. A test asserts that `total` is at least the sum of the phases, using unrounded monotonic
+durations. When the job runs two connect rounds, `connect` and `connect_attempts` accumulate over both.
+The object goes to
 `last_result`, the history entry (`timings`, defined here and referenced by the Studio spec) and one INFO
 log line per job (`tinyprint job timings ...`, metadata only). Failures keep the partial timeline and the
 failing phase.
@@ -83,28 +87,34 @@ failing phase.
 - New phase `waiting_for_printer`, entered when the pinned proxy has no *fresh* advertisement for the
   printer. HA's connectable advertisement cache keeps a silent device listed for up to 195 s
   (`CONNECTABLE_FALLBACK_MAXIMUM_STALE_ADVERTISEMENT_SECONDS`, habluetooth 6.26.11), so "listed" is not
-  "present". Freshness is `time.monotonic() - scanner.discovered_device_timestamps[address]` below
-  `ADVERT_FRESH_SECONDS` (30 s to start; the plan adjusts it from the measured advertising interval) on
-  the pinned scanner, the same per-scanner view `proxy_client.py` already uses
-  (`async_scanner_devices_by_address`, which returns the scanner object that owns the timestamp map; the
-  plan confirms the accessor on HA 2026.9.3). The wait polls that view once per second.
-  `async_process_advertisements` is not used: the Bluetooth manager delivers an advertisement to callbacks
-  only from the source it currently prefers for that address, so a stronger second scanner would hide the
-  pinned proxy and the wait would time out with the printer on.
+  "present". The pinned scanner is resolved from the scanner registry by its source
+  (`bluetooth.async_current_scanners(hass)`), not from `async_scanner_devices_by_address`, which returns
+  only scanners that currently list the address and so has nothing to poll once the cache entry expired.
+  Freshness is `time.monotonic() - scanner.discovered_device_timestamps[address]` below
+  `ADVERT_FRESH_SECONDS` (30 s to start; the plan adjusts it from the measured advertising interval); a
+  missing timestamp means not fresh. The wait polls once per second. `async_process_advertisements` is not
+  used: the Bluetooth manager delivers an advertisement to callbacks only from the source it currently
+  prefers for that address, so a stronger second scanner would hide the pinned proxy and the wait would
+  time out with the printer on.
 - One deadline per job: `deadline = monotonic() + wait_for_printer_seconds`, computed once when the job
-  starts, and one helper `wait_until_fresh(scanner, address, deadline)` used from both entry points below.
-  The wait runs before `self.connection()` (`studio_runtime.py:178`) so it is not inside the 45 s
-  `CONNECT_DEADLINE` (`connection.py:10`). Entry 1: no fresh advertisement at job start. Entry 2: all
-  connect attempts failed (or `proxy_client.py` raised its "not visible" error between attempts) and no
-  advertisement newer than the start of the connect arrived; the job waits for the time left until the
-  same deadline, then connects once more. There are at most two connect rounds, so the lock is held for
-  at most the wait seconds plus two 40 s connect budgets plus transmit. A proxy that is down (its scanner
-  is absent from the scanner registry) fails at once with its own message instead of waiting.
+  starts, and one helper `wait_until_fresh(scanner, address, newer_than, deadline)` used from both entry
+  points below (`newer_than` is a monotonic timestamp: now minus `ADVERT_FRESH_SECONDS` for entry 1, the
+  start of the failed connect for entry 2). The wait runs before `self.connection()`
+  (`studio_runtime.py:200`) so it is not inside the 45 s `CONNECT_DEADLINE` (`connection.py:10`).
+  Entry 1: no fresh advertisement at job start. Entry 2: all connect attempts failed (or
+  `proxy_client.py` raised its "not visible" error between attempts) and no advertisement newer than the
+  start of the connect arrived; the job waits for the time left until the same deadline, then connects
+  once more, and a timeout of this wait reports `printer_not_seen` together with the original connect
+  error. There are at most two connect rounds, so the lock is held for at most the wait seconds plus two
+  45 s connect deadlines plus notify, transmit and `printer_wait`. A proxy whose scanner is absent from
+  the registry at job start fails at once with its own message instead of waiting; an absence that begins
+  during a wait (proxy reconnecting) keeps waiting until the deadline.
   [INFERENCE: `discovered_device_timestamps` semantics, the 195 s window and whether an ESP32 proxy pauses
   scanning while it connects are read from habluetooth source and not exercised on the device; the plan
   verifies them on the odroid with the printer switched off.]
 - Option `wait_for_printer_seconds` (same name in the options flow and in YAML), whole seconds, 0-300,
-  default 60. `0` keeps today's fail-fast with the same error code and message as before. Configured in
+  default 60. `0` keeps today's behaviour exactly: the existing "listed" check, fail-fast, same error code
+  and message as before. Configured in
   the options flow next to `proxy_source`; the YAML import maps it like `proxy_source`. Raising the
   default from today's instant failure means a job for an absent printer holds the printer lock for up to
   60 s, during which other jobs get "Printer is busy".
@@ -116,7 +126,8 @@ failing phase.
   one 40 s total budget, `proxy_client.py:21-26`).
 - Timeout result: failed, phase `waiting_for_printer`, error code `printer_not_seen`, message names the
   waited seconds and says to switch the printer on, move it closer or close other printer clients (a
-  printer connected to a phone stops advertising). It is not `delivery_uncertain`; no bytes were sent.
+  printer connected to a phone stops advertising). It is not `delivery_uncertain`: no raster (print data)
+  write happened, the same boundary the Studio spec uses for history status.
 - Status is pushed, not polled. The runtime writes `phase` and `waiting_until` (UTC ISO-8601) into
   `last_result` on every phase transition and updates the job sensor state; the sensor already exposes
   `last_result` as attributes (`sensor.py:27-34`) and its status reaches the entity by dispatcher
@@ -133,7 +144,7 @@ failing phase.
 
 Reference bitmap: a fixed packed fixture (`tests/fixtures/reference_247.bin`, 247 rows, SHA-256 recorded in
 the experiment doc) rendered once from the label of the 10-21 08:03 job (the original bytes were not
-kept), printed through `print_bitmap` in every run. Each experiment: at least 5 runs, one variable
+kept; this is a stand-in with the same row count), printed through `print_bitmap` in every run. Each experiment: at least 5 runs, one variable
 changed, medians from the timeline, every output photographed; a change is adopted only if the median total
 improves and the print has no visible defect (squeezed or dropped rows, swallowed last line).
 
@@ -166,7 +177,8 @@ captured real replies.
 - `docs/studio.md`: the waiting status line and `last_result.phase` list.
 - Fake-clock tests for `proxy_client` / job layer: printer appears after N s (job proceeds), never appears
   (`printer_not_seen`, no bytes, lock released), listed but stale advertisement enters the wait, failed
-  connect then wait then one more connect within the single deadline, proxy scanner absent fails at once, cancel
+  connect then wait then one more connect within the single deadline, proxy scanner absent at start fails
+  at once but absent during a wait keeps waiting, cancel
   during wait, a fresh advertisement on the pinned scanner while a stronger second scanner owns the address,
   `wait_for_printer_seconds: 0` fails fast, timeline fields present on success and on failure, YAML import
   of `wait_for_printer_seconds`.
