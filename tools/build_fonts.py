@@ -9,13 +9,19 @@ Requires: fonttools==4.67.0
 Upstream files are downloaded from the pinned google/fonts commit, verified by SHA-256 and cached in
 ~/.cache/tinyprint-research/fonts-cache/. The shipped binaries are the committed build output; the
 SHA-256 of each is written to SHA256SUMS. fontTools output depends on its version, hence the pin.
+
+CI verifies the committed hashes through tests/test_fonts.py. `--check` is the maintainers'
+reproducibility check (needs the network on a cold cache): run it when bumping a pin.
 """
 
 import argparse
 import hashlib
 import io
+import os
+import shutil
 import sys
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -31,6 +37,7 @@ ROBOTO_FLEX = {
     "path": "ofl/robotoflex/RobotoFlex[GRAD,XOPQ,XTRA,YOPQ,YTAS,YTDE,YTFI,YTLC,YTUC,opsz,slnt,wdth,wght].ttf",
     "sha256": "9b523f7d82593df0107173849ebb8c817471a1df4b4fb2c3cbf40cfd810c8281",
     "licence_path": "ofl/robotoflex/OFL.txt",
+    "licence_sha256": "9cbaed04b20c853f99840efe5dc96956f6f6120ed83a0ade35f9281a2b63e5d0",
     "output": "RobotoFlex.ttf",
     "licence": "OFL-RobotoFlex.txt",
 }
@@ -38,6 +45,7 @@ TINY5 = {
     "path": "ofl/tiny5/Tiny5[BLED,JITT,ROND,wdth,wght].ttf",
     "sha256": "588626f2c1b164f55927c0d8123f4bc134651aad7d257da68fc19b0824b0d8fa",
     "licence_path": "ofl/tiny5/OFL.txt",
+    "licence_sha256": "690fda321d0ebce403249c8d61dadddcee09dc8813424cc5a8f982efcff9a9a3",
     "output": "Tiny5-Regular.ttf",
     "licence": "OFL-Tiny5.txt",
 }
@@ -76,17 +84,22 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def fetch(path: str, expected: str | None) -> bytes:
-    cached = CACHE_DIR / sha256(path.encode())[:16]
+def fetch(path: str, expected: str) -> bytes:
+    cached = CACHE_DIR / sha256(f"{COMMIT}/{path}".encode())[:16]
     if cached.exists():
         data = cached.read_bytes()
     else:
         url = RAW_URL.format(path=urllib.parse.quote(path, safe="/"))
-        with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - pinned https URL
-            data = response.read()
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cached.write_bytes(data)
-    if expected is not None and sha256(data) != expected:
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - pinned https URL
+                data = response.read()
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise SystemExit(f"download failed for {url}: {error}") from error
+        if sha256(data) == expected:
+            partial = cached.with_suffix(".part")
+            partial.write_bytes(data)
+            os.replace(partial, cached)
+    if sha256(data) != expected:
         cached.unlink(missing_ok=True)
         raise SystemExit(f"{path}: SHA-256 {sha256(data)} != pinned {expected}")
     return data
@@ -105,6 +118,8 @@ def build_font(source: Path, pins: dict[str, float], target: Path) -> None:
     options.notdef_outline = True
     options.recalc_timestamp = False
     options.drop_tables = [*options.drop_tables, "meta"]
+    # OFL notice, licence and licence URL records (the default keeps ids 0-6 only).
+    options.name_IDs = [0, 1, 2, 3, 4, 5, 6, 13, 14]
     subsetter = subset.Subsetter(options)
     subsetter.populate(unicodes=UNICODES)
     subsetter.subset(font)
@@ -118,7 +133,7 @@ def build(output: Path) -> dict[str, str]:
             source = Path(work) / "source.ttf"
             source.write_bytes(fetch(spec["path"], spec["sha256"]))
             build_font(source, pins, output / spec["output"])
-            licence = fetch(spec["licence_path"], None).replace(b"\r\n", b"\n")
+            licence = fetch(spec["licence_path"], spec["licence_sha256"]).replace(b"\r\n", b"\n")
             (output / spec["licence"]).write_bytes(licence)
             sums[spec["output"]] = sha256((output / spec["output"]).read_bytes())
     lines = "".join(f"{digest}  {name}\n" for name, digest in sorted(sums.items()))
@@ -126,24 +141,40 @@ def build(output: Path) -> dict[str, str]:
     return sums
 
 
+def licence_text(output: Path) -> dict[str, bytes]:
+    return {
+        spec["licence"]: (output / spec["licence"]).read_bytes() for spec in (ROBOTO_FLEX, TINY5)
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="fail if a rebuild differs")
     args = parser.parse_args()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not args.check:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        for name, digest in build(OUTPUT_DIR).items():
-            print(f"{digest}  {name}")
-        return 0
     with tempfile.TemporaryDirectory(dir=CACHE_DIR.parent) as temp:
-        rebuilt = build(Path(temp))
-        shipped = (OUTPUT_DIR / "SHA256SUMS").read_text()
-        wanted = "".join(f"{digest}  {name}\n" for name, digest in sorted(rebuilt.items()))
-        if shipped != wanted:
-            print("fonts differ from a fresh build:\n" + wanted, file=sys.stderr)
-            return 1
-    print("fonts match a fresh build")
+        built = Path(temp)
+        sums = build(built)
+        if args.check:
+            differing = [
+                name
+                for name in [*sums, *licence_text(built)]
+                if not (OUTPUT_DIR / name).exists()
+                or (OUTPUT_DIR / name).read_bytes() != (built / name).read_bytes()
+            ]
+            if (OUTPUT_DIR / "SHA256SUMS").read_bytes() != (built / "SHA256SUMS").read_bytes():
+                differing.append("SHA256SUMS")
+            if differing:
+                print("differ from a fresh build: " + ", ".join(differing), file=sys.stderr)
+                return 1
+            print("fonts match a fresh build")
+            return 0
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        for path in built.iterdir():
+            shutil.copyfile(path, OUTPUT_DIR / (path.name + ".part"))
+            os.replace(OUTPUT_DIR / (path.name + ".part"), OUTPUT_DIR / path.name)
+        for name, digest in sums.items():
+            print(f"{digest}  {name}")
     return 0
 
 

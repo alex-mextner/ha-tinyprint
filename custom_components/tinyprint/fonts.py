@@ -43,6 +43,7 @@ FONTS: dict[str, dict] = {
 }
 
 _CAPPED_ROLES = ("title", "heading")
+_ROLES = (*_CAPPED_ROLES, "footer")
 
 
 def font_entry(name: object) -> dict:
@@ -57,6 +58,8 @@ def bundled_font_path(name: str) -> Path:
 
 def derived_size(name: str, role: str, size: int) -> int:
     rule = font_entry(name)["derived"]
+    if role not in _ROLES:
+        raise ValueError(f"role must be one of {', '.join(_ROLES)}")
     value = size + rule[role]
     if rule["snap"]:
         value = math.floor(value / rule["snap"] + 0.5) * rule["snap"]

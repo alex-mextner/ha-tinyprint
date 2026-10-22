@@ -92,6 +92,12 @@ def test_derived_size_table(font, size, role, expected):
     assert derived_size(font, role, size) == expected
 
 
+@pytest.mark.parametrize("role", ["snap", "cap", "floor", "body", "", None])
+def test_derived_size_rejects_non_roles(role):
+    with pytest.raises(ValueError):
+        derived_size("tiny5", role, 16)
+
+
 @pytest.mark.parametrize("name", ["../../etc/passwd", "Roboto Flex", "", None, 5])
 def test_font_entry_is_a_closed_enum(name):
     with pytest.raises(ValueError):
@@ -115,6 +121,12 @@ def test_shipped_files_match_sha256sums_and_the_table():
     assert sorted(p.name for p in FONT_DIR.glob("*.ttf")) == sorted(sums)
     for licence in ("OFL-RobotoFlex.txt", "OFL-Tiny5.txt"):
         assert "SIL OPEN FONT LICENSE" in (FONT_DIR / licence).read_text()
+
+
+@pytest.mark.parametrize("name", ["RobotoFlex.ttf", "Tiny5-Regular.ttf"])
+def test_shipped_fonts_keep_the_ofl_name_records(name):
+    names = {n.nameID for n in TTFont(FONT_DIR / name)["name"].names}
+    assert {0, 13, 14} <= names
 
 
 def test_roboto_flex_exposes_only_width_and_weight_axes():
