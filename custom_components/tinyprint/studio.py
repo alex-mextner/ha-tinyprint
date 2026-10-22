@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import copy
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from homeassistant.helpers.service import async_register_admin_service
 from .bitmap import BitmapError, decode_bitmap_b64
 from .const import DOMAIN
 from .diagnostics import transport_info
+from .fonts import FONTS
 from .sensor import IN_FLIGHT_STATES, job_sensor_unique_id
 from .studio_render import PRESETS, TEMPLATES, preview_result, render_document
 
@@ -148,6 +150,7 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             "presets": PRESETS,
             "version": PANEL_VERSION,
             "in_flight_states": sorted(IN_FLIGHT_STATES),
+            "fonts": copy.deepcopy(FONTS),
         }
 
     async def diagnose(call: ServiceCall) -> dict[str, Any] | None:

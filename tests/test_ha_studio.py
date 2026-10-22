@@ -200,6 +200,18 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         result = await self._call_printer_info(dev_registry, ent_registry)
         self.assertIsNone(result["printers"][0]["entity_id"])
 
+    async def test_printer_info_serves_the_font_table(self):
+        from custom_components.tinyprint import fonts
+
+        dev_registry, ent_registry = self._info_with_entity_registry(None)
+        result = await self._call_printer_info(dev_registry, ent_registry)
+        self.assertEqual(list(result["fonts"]), ["roboto_flex", "tiny5"])
+        self.assertEqual(result["fonts"]["tiny5"]["sizes"]["values"], [8, 16, 24, 32, 40, 48])
+        result["fonts"]["tiny5"]["sizes"]["values"].append(56)
+        result["fonts"]["roboto_flex"]["derived"]["cap"] = 1
+        self.assertEqual(fonts.FONTS["tiny5"]["sizes"]["values"], [8, 16, 24, 32, 40, 48])
+        self.assertEqual(fonts.FONTS["roboto_flex"]["derived"]["cap"], 64)
+
     async def test_diagnostic_version_matches_manifest(self):
         import json
         from pathlib import Path
