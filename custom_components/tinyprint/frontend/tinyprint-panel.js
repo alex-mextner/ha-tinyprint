@@ -21,7 +21,11 @@ const FILE_HINT = 'До 2 МиБ и 4 миллионов пикселей. Фа�
 const BROWSER_ONLY_NOTICE = 'Несколько колонок и Tiny5 шириной 2x работают только в панели, поэтому действие для автоматизации недоступно: печатайте из панели.';
 // While one of these sliders is dragged the strip shows the coarse-grid approximate render.
 const SLIDER_OPTIONS = ['font_width', 'font_weight'];
-const RELEASE_EVENTS = ['pointerup', 'pointercancel'];
+// A drag can also end with no pointer event at all (alt-tab, a hidden tab): the window loses focus.
+const RELEASE_EVENTS = ['pointerup', 'pointercancel', 'blur'];
+const PRESS_FOCUS_MS = 600; // how long after a press the focus it causes still counts as the press's
+const PIN_KEEP = 160; // CSS px of the page that stay visible below a pinned strip card
+const PIN_MIN_PAPER = 240; // CSS px of paper a pinned strip card must show
 
 function element(tag, attributes = {}, text) {
   const created = document.createElement(tag);
@@ -68,6 +72,9 @@ class TinyPrintPanel extends HTMLElement {
     this.scheduler = null;
     this.strip = null;
     this.stripObserver = null;
+    this.fitFrame = 0; // the pending animation frame of fitLive
+    this.lastFocused = null; // focus the browser merely restores (window or tab back) is not a move to correct
+    this.lastPress = -Infinity; // time of the last pointerdown: the focus a press causes must not scroll the page
     this.zoomChosen = false; // until the user presses #zoom the strip's room picks the scale
     this.lastResult = null;
     this.failure = null;
@@ -88,6 +95,7 @@ class TinyPrintPanel extends HTMLElement {
     this.fonts = {};
     this.fontName = null; // the font the size, width and weight controls were built for
     this.releaseSlider = null;
+    this.releaseHidden = () => { if (document.visibilityState === 'hidden') this.releaseSlider?.(); };
     this.approximateRequested = false; // the newest render request was a slider-drag approximation
   }
 
@@ -101,9 +109,11 @@ class TinyPrintPanel extends HTMLElement {
   // let the next connect mount from scratch (a disposed renderer cannot be reused).
   disconnectedCallback() {
     if (this.releaseSlider) for (const name of RELEASE_EVENTS) window.removeEventListener(name, this.releaseSlider);
+    document.removeEventListener('visibilitychange', this.releaseHidden);
     this.epoch += 1;
     this.imageLoadSequence += 1;
     this.stripObserver?.disconnect();
+    cancelAnimationFrame(this.fitFrame);
     this.strip?.dispose();
     this.scheduler?.dispose();
     this.renderer?.dispose();
@@ -145,7 +155,7 @@ class TinyPrintPanel extends HTMLElement {
         header .mark { width:42px; height:42px; display:grid; place-items:center; border-radius:12px; background:var(--primary-color,#007a73); color:white; font-size:23px; }
         .local { margin-left:auto; font-size:12px; color:var(--secondary-text-color,#697580); }
         main { max-width:1220px; margin:auto; padding:24px; }
-        .devicebar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:22px; }
+        .devicebar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px; }
         .devicebar label { flex:1; min-width:210px; } .devicebar select { margin-top:4px; }
         .badge { border-radius:999px; background:var(--secondary-background-color,#e8eeed); padding:6px 12px; font-size:12px; }
         .layout { display:grid; grid-template-columns:minmax(0,1fr); align-items:start; gap:24px; }
@@ -164,44 +174,38 @@ class TinyPrintPanel extends HTMLElement {
         .buttons { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
         .button { border:1px solid var(--divider-color,#cdd5dd); background:var(--card-background-color,#fff); border-radius:9px; padding:10px 15px; min-height:44px; }
         .primary { background:var(--primary-color,#007a73); border-color:transparent; color:var(--text-primary-color,#fff); font-weight:650; flex:1; }
-        .strip-card { min-width:0; } h2 { margin:0; font-size:18px; } .strip-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
-        .canvas { background:var(--secondary-background-color,#edf0f3); border-radius:10px; min-height:300px; max-height:600px; overflow:auto; scrollbar-gutter:stable; margin:18px 0 12px; padding:20px 12px; display:flex; flex-direction:column; align-items:safe center; }
-        .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; } .chip { border:1px dashed var(--secondary-text-color,#697580); background:transparent; border-radius:999px; padding:4px 12px; min-height:32px; font-size:13px; }
+        .live,.more { min-width:0; } h2 { margin:0; font-size:18px; } .strip-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+        .canvas { background:var(--secondary-background-color,#edf0f3); border-radius:10px; min-height:300px; max-height:600px; overflow:auto; scrollbar-gutter:stable; margin:10px 0 8px; padding:14px 12px; display:flex; flex-direction:column; align-items:safe center; }
+        .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; } .chip { border:1px dashed var(--secondary-text-color,#697580); background:transparent; border-radius:999px; padding:4px 12px; min-height:32px; font-size:13px; }
         .box { background:white; } .overlay::selection { background:rgba(0,122,115,.3); color:transparent; }
         .overlay:not(.loose)::placeholder { color:transparent; opacity:1; } .overlay:not(.loose):focus-visible { outline:2px solid var(--primary-color,#007a73); outline-offset:0; } .overlay.slot:not(:focus) { pointer-events:none; }
         #docked:not(:empty) { margin-top:16px; }
-        .live { min-width:0; } .bar { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:2px 14px; align-items:end; margin-top:12px; }
-        .bar .field { margin:0 0 8px; } .bar .check { min-height:44px; } .bar details { grid-column:1/-1; margin-top:0; } .bar summary { padding:6px 0; }
-        #options { margin:0; } #font-hint { margin:0 0 6px; color:var(--warning-color,#8a5a00); }
-        @media(min-width:900px) and (min-height:900px) { .live { position:sticky; top:0; z-index:2; background:var(--card-background-color,#fff); padding:4px 0 2px; } .live .canvas { min-height:240px; max-height:calc(100vh - 470px); } }
+        .live { padding:14px 16px; } .live .strip-head .button { min-height:40px; padding:4px 12px; }
+        /* Compact bar: controls stay at least 40px tall (touch targets), labels small, one row where the width allows. */
+        .bar { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:0 12px; align-items:end; margin-top:8px; }
+        .bar .field { margin:0 0 4px; } .bar .field label { margin-bottom:2px; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .bar .check { min-height:40px; }
+        .bar select,.bar input:not([type=checkbox]):not([type=range]) { min-height:40px; padding:6px 8px; } .bar input[type=range] { min-height:40px; }
+        .bar details { grid-column:span 2; margin-top:0; border-top:0; } .bar summary { padding:8px 0; }
+        #options { margin:0; } #font-hint { margin:4px 0 0; color:var(--warning-color,#8a5a00); }
+        /* fitLive() pins the strip card only when its chrome plus 240px of paper fits the panel, so a pinned card never traps the page. */
+        .live.pinned { position:sticky; top:0; z-index:2; box-shadow:0 8px 16px #0002; }
+        #image-more .bar { grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); } #image-more[open] .bar { max-height:clamp(110px,17vh,220px); overflow:auto; margin-top:0; } #image-options > .bar { margin-top:0; } #image-more summary { padding:4px 0; }
         .empty { padding:54px 12px; text-align:center; max-width:270px; color:var(--secondary-text-color,#697580); font-size:14px; }
         .empty .symbol { font-size:40px; display:block; margin-bottom:12px; }
         #raster { display:block; width:384px; max-width:none; height:auto; background:white; box-shadow:0 4px 15px #0002; image-rendering:pixelated; }
         #raster.ghost { opacity:.55; }
         .caption { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; font-size:12px; color:var(--secondary-text-color,#697580); }
-        #notice { padding:12px 15px; border-radius:9px; background:var(--secondary-background-color,#e9efee); margin:18px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+        #notice { padding:8px 12px; border-radius:9px; background:var(--secondary-background-color,#e9efee); margin:8px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; max-height:clamp(44px,10vh,100px); overflow-y:auto; }
         #notice.error { border-left:4px solid var(--error-color,#be3b3b); }
         pre { max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:11px; background:var(--secondary-background-color,#edf0f3); padding:12px; border-radius:8px; }
         [hidden] { display:none !important; }
-        @media(max-width:760px) { header { padding:14px 12px; gap:10px; } .local { display:none; } main { padding:14px 12px 32px; } .layout { gap:16px; } .card { padding:17px; } .devicebar { gap:8px; } .devicebar .button { font-size:12px; } .canvas { max-height:450px; } }
+        @media(max-width:760px) { header { padding:8px 12px; gap:10px; } .local { display:none; } main { padding:8px 12px 32px; } .layout { gap:16px; } .card { padding:17px; } .live { padding:12px; } .devicebar { gap:8px; } .devicebar .button { font-size:12px; } .canvas { max-height:450px; padding:12px; } .bar { grid-template-columns:repeat(auto-fit,minmax(96px,1fr)); gap:0 8px; margin-top:4px; } }
       </style>
       <header><ha-menu-button aria-label="Открыть меню"></ha-menu-button><div class="mark" aria-hidden="true">▤</div><div><div class="eyebrow">ЛОКАЛЬНАЯ ТЕРМОПЕЧАТЬ</div><h1>TinyPrint</h1></div><span class="local">Текст · QR · Изображения</span></header>
       <main>
         <div class="devicebar"><label>Принтер<select id="device"><option value="">Загрузка принтеров…</option></select></label><span id="device-status" class="badge">Подключение к HA</span><span id="job-status" class="badge" role="status" hidden></span><button id="refresh" class="button" aria-label="Обновить состояние">Обновить</button><button id="diagnose" class="button">Проверить Bluetooth</button></div>
         <div class="layout">
-          <section class="card" aria-label="Редактор этикетки">
-            <div class="tabs" role="tablist"><button data-mode="template" role="tab" aria-selected="true">Шаблоны</button><button data-mode="qr" role="tab" aria-selected="false">QR-код</button><button data-mode="image" role="tab" aria-selected="false">Картинка</button></div>
-            <fieldset id="editor">
-              <div id="template-form"><div class="field"><label for="template">Макет этикетки</label><select id="template"></select></div></div>
-              <div id="qr-form" hidden><div class="field"><label for="qr-data">Ссылка или данные QR</label><textarea id="qr-data" maxlength="500" placeholder="https://…"></textarea></div><p class="hint">Целые модули и белое поле сохраняются. Фотофильтры к QR не применяются.</p></div>
-              <div id="image-form" hidden>
-                <div class="field"><label for="image-file">Изображение с телефона или компьютера</label><input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"><p id="file-name" class="hint">${FILE_HINT}</p></div>
-              </div>
-            </fieldset>
-            <div class="buttons"><button id="print" class="button primary" disabled>Печатать</button><button id="cancel" class="button" hidden>Остановить</button></div>
-          </section>
-          <section class="card strip-card" aria-label="Бумажная лента">
-            <div class="live">
+          <section class="card live" aria-label="Бумажная лента">
               <div class="strip-head"><h2>На бумаге</h2><span class="badge">384 точки</span><button id="zoom" class="button" aria-label="Масштаб ленты" aria-pressed="false">1×</button></div>
               <fieldset id="options" aria-label="Параметры этикетки">
                 <div id="text-options" class="bar">
@@ -215,19 +219,33 @@ class TinyPrintPanel extends HTMLElement {
                   <label class="check"><input type="checkbox" id="border" data-option="border">Рамка этикетки</label>
                   <details id="qr-options"><summary>Размер и надёжность QR</summary><div class="row"><div class="field"><label for="qr_size">Размер QR, точки</label><input id="qr_size" data-option="qr_size" data-number type="number" min="96" max="360" value="320"></div><div class="field"><label for="qr_correction">Коррекция ошибок</label><select id="qr_correction" data-option="qr_correction"><option value="M">M · стандартная</option><option value="Q">Q · повышенная</option><option value="H">H · максимальная</option></select></div></div></details>
                 </div>
-                <div id="image-options" class="bar" hidden>
-                  <div class="field"><label for="preset">Подготовка к термопечати</label><select id="preset" data-option="preset"></select></div>
+                <div id="image-options" hidden>
+                  <div class="bar"><div class="field"><label for="preset">Подготовка к термопечати</label><select id="preset" data-option="preset"></select></div></div>
+                  <details id="image-more"><summary>Параметры изображения</summary><div class="bar">
                   <div class="field"><label for="method">Преобразование</label><select id="method" data-option="method"><option value="floyd_steinberg">Floyd–Steinberg</option><option value="threshold">Чёрное / белое</option><option value="ordered">Упорядоченный растр</option></select></div>
                   <div class="field"><label for="rotate">Поворот</label><select id="rotate" data-option="rotate" data-number><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></div>
                   ${this.range('brightness','Яркость',.25,2,.05,1.1)}${this.range('contrast','Контраст',.25,3,.05,1.25)}${this.range('sharpness','Резкость',0,3,.1,1.2)}${this.range('threshold','Порог чёрного',1,254,1,128)}
                   <div class="field"><label for="fit">Масштаб</label><select id="fit" data-option="fit"><option value="width">По заданной ширине</option><option value="original">Без увеличения</option></select></div>
                   <div class="field"><label for="width">Ширина, точки</label><input id="width" data-option="width" data-number type="number" min="96" max="384" value="384"></div>
                   <label class="check"><input type="checkbox" id="invert" data-option="invert">Инвертировать изображение</label>
+                  </div></details>
                 </div>
               </fieldset>
               <div id="paper"></div><div class="caption"><span id="dimensions"></span><span id="ink"></span></div>
-            </div>
-            <div id="notice" role="status" aria-live="polite" hidden></div><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
+            <div id="notice" role="status" aria-live="polite" hidden></div>
+          </section>
+          <section id="editor-card" class="card" aria-label="Редактор этикетки">
+            <div class="tabs" role="tablist"><button data-mode="template" role="tab" aria-selected="true">Шаблоны</button><button data-mode="qr" role="tab" aria-selected="false">QR-код</button><button data-mode="image" role="tab" aria-selected="false">Картинка</button></div>
+            <fieldset id="editor">
+              <div id="template-form"><div class="field"><label for="template">Макет этикетки</label><select id="template"></select></div></div>
+              <div id="qr-form" hidden><div class="field"><label for="qr-data">Ссылка или данные QR</label><textarea id="qr-data" maxlength="500" placeholder="https://…"></textarea></div><p class="hint">Целые модули и белое поле сохраняются. Фотофильтры к QR не применяются.</p></div>
+              <div id="image-form" hidden>
+                <div class="field"><label for="image-file">Изображение с телефона или компьютера</label><input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"><p id="file-name" class="hint">${FILE_HINT}</p></div>
+              </div>
+            </fieldset>
+            <div class="buttons"><button id="print" class="button primary" disabled>Печатать</button><button id="cancel" class="button" hidden>Остановить</button></div>
+          </section>
+          <section id="more-card" class="card more" aria-label="Диагностика и автоматизация"><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
         </div>
       </main>`;
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => this.switchMode(button.dataset.mode)));
@@ -241,9 +259,14 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#options').addEventListener('change', event => this.onOptionChange(event));
     // A drag that ends where it started, or whose pointer is cancelled or lost, fires no `change`.
     this.releaseSlider = () => { if (this.approximateRequested) this.renderIfChanged(); };
+    this.shadowRoot.addEventListener('pointerdown', () => { this.lastPress = performance.now(); }, true);
     for (const name of RELEASE_EVENTS) window.addEventListener(name, this.releaseSlider);
+    document.addEventListener('visibilitychange', this.releaseHidden);
     this.$('#options').addEventListener('lostpointercapture', this.releaseSlider);
     this.$('#print').addEventListener('click', () => this.print());
+    // Focus anywhere else (the strip card, the device bar) forgets the last control: coming back to it is a move, not a restore.
+    for (const id of ['.live', '.devicebar']) this.$(id).addEventListener('focusin', () => { this.lastFocused = null; });
+    for (const id of ['#editor-card', '#more-card']) this.$(id).addEventListener('focusin', ({ target }) => requestAnimationFrame(() => this.keepFocusClear(target)));
     this.$('#cancel').addEventListener('click', () => this.cancel());
     this.$('#refresh').addEventListener('click', () => { if (this.failure) this.renderNow(); this.loadInfo(); });
     this.$('#diagnose').addEventListener('click', () => this.diagnose());
@@ -252,8 +275,15 @@ class TinyPrintPanel extends HTMLElement {
     this.strip = new this.modules.strip.PaperStrip(this.$('#paper'));
     this.strip.show(null, EMPTY_STRIP_TEXT);
     this.$('#zoom').addEventListener('click', () => { this.zoomChosen = true; this.setZoom(this.zoom === 1 ? 2 : 1); });
-    this.stripObserver = new ResizeObserver(() => this.fitZoom());
+    // fitLive changes the canvas height, which resizes the observed card: run it a frame later.
+    this.stripObserver = new ResizeObserver(() => {
+      this.fitZoom();
+      cancelAnimationFrame(this.fitFrame);
+      this.fitFrame = requestAnimationFrame(() => this.fitLive());
+    });
     this.stripObserver.observe(this.$('#paper'));
+    this.stripObserver.observe(this.$('.live'));
+    this.stripObserver.observe(this);
   }
 
   range(id, title, min, max, step, value) {
@@ -283,12 +313,12 @@ class TinyPrintPanel extends HTMLElement {
       control.value = value;
       return control;
     };
-    this.$('#size-field').replaceChildren(...field('font_size', 'Размер текста', sizes.values
+    this.$('#size-field').replaceChildren(...field('font_size', 'Размер', sizes.values
       ? choice('font_size', sizes.values.map(v => [v, v]), values.font_size)
       : input('font_size', 'number', sizes, values.font_size)));
     this.$('#width-field').replaceChildren(...(width.kind === 'axis'
-      ? field('font_width', 'Ширина шрифта', input('font_width', 'range', width, values.font_width), true)
-      : field('font_width', 'Ширина шрифта', choice('font_width', width.values.map(v => [v, `${v / 100}x`]), values.font_width))));
+      ? field('font_width', 'Ширина', input('font_width', 'range', width, values.font_width), true)
+      : field('font_width', 'Ширина', choice('font_width', width.values.map(v => [v, `${v / 100}x`]), values.font_width))));
     this.$('#weight-field').hidden = weight.kind !== 'axis';
     this.$('#weight-field').replaceChildren(...(weight.kind === 'axis'
       ? field('font_weight', 'Жирность', input('font_weight', 'range', weight, values.font_weight), true)
@@ -583,6 +613,52 @@ class TinyPrintPanel extends HTMLElement {
   }
   fitZoom() {
     if (!this.zoomChosen) this.setZoom(this.modules.strip.autoZoom(this.strip.availableWidth()));
+  }
+  /**
+   * Pins the strip card to the top of the panel while it stays usable. The card's own chrome (title,
+   * option bar, caption) plus PIN_MIN_PAPER of paper (and the canvas padding and scrollbar around
+   * it) must fit the panel height minus PIN_KEEP, so the rest of the page is never covered. A card
+   * that does not fit scrolls with the page instead of trapping it; a pinned one gives the canvas
+   * what is left. A notice is not part of that budget (it comes and goes with Print and errors and
+   * must not unpin the card), but it still takes room from the canvas.
+   */
+  fitLive() {
+    if (!this.ready) return;
+    const live = this.$('.live'), area = this.$('.canvas'), notice = this.$('#notice');
+    const { scrollTop, scrollLeft } = area; // the reset below must not move the strip's own scroll
+    area.style.minHeight = area.style.maxHeight = ''; // measure the stylesheet's own sizes and cap
+    const style = getComputedStyle(area);
+    const cap = parseFloat(style.maxHeight) || Infinity; // `none` parses to NaN
+    const noticeHeight = notice.hidden ? 0 : notice.offsetHeight + parseFloat(getComputedStyle(notice).marginTop);
+    const room = this.clientHeight - PIN_KEEP;
+    const chrome = live.offsetHeight - area.offsetHeight - noticeHeight;
+    const scrollbar = area.offsetHeight - area.clientHeight; // a horizontal scrollbar on a narrow panel
+    const canvasMin = PIN_MIN_PAPER + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + scrollbar;
+    const pinned = chrome + canvasMin <= room;
+    const wasPinned = live.classList.contains('pinned');
+    live.classList.toggle('pinned', pinned);
+    if (pinned) {
+      area.style.minHeight = `${canvasMin}px`;
+      area.style.maxHeight = `${Math.min(Math.max(room - chrome - noticeHeight, canvasMin), cap)}px`;
+    }
+    area.scrollTop = scrollTop;
+    area.scrollLeft = scrollLeft;
+    // A card that stops being pinned while the page is scrolled past it would leave the view: follow it.
+    const top = live.getBoundingClientRect().top - this.getBoundingClientRect().top; // relative to the panel, not the window
+    const active = this.shadowRoot.activeElement;
+    const typingBelowCard = active?.matches('textarea, input:not([type=range]):not([type=checkbox]), select') && !live.contains(active);
+    if (wasPinned && !pinned && top < 0 && !typingBelowCard) this.scrollTop += top; // not while the user types below the card
+  }
+  /** A control that takes focus below a pinned strip card must not stay hidden behind it (checked a frame later: the browser's own focus scroll runs first). */
+  keepFocusClear(target) {
+    const live = this.$('.live');
+    const restored = target === this.lastFocused;
+    this.lastFocused = target;
+    if (restored) return;
+    // A press focuses its target (touch taps a moment after pointerup): moving the page now would lose the click.
+    if (performance.now() - this.lastPress < PRESS_FOCUS_MS || !live.classList.contains('pinned')) return;
+    const gap = target.getBoundingClientRect().top - live.getBoundingClientRect().bottom;
+    if (gap < 0) this.scrollTop += gap - 8;
   }
 
   /** Every Print blocker, derived from the scheduler's results and the CURRENT `hass`. */

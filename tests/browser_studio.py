@@ -1815,7 +1815,13 @@ async def check_image_mode_shows_only_image_options(p, browser, image_file):
         await page.locator('[data-mode="image"]').click()
         for key in ("font", "font_size", "font_width", "font_weight", "align", "columns", "border"):
             assert not await page.locator(f"#{key}").is_visible(), key
-        for key in ("preset", "method", "brightness", "threshold", "invert"):
+        await page.locator("#preset").scroll_into_view_if_needed()
+        assert await page.locator("#preset").is_visible()
+        assert not await page.locator("#image-more").evaluate(
+            "(e) => e.open"
+        )  # the rest is collapsed
+        await page.locator("#image-more summary").click()
+        for key in ("method", "brightness", "threshold", "invert"):
             assert await page.locator(f"#{key}").is_visible(), key
         assert await page.evaluate(f"() => {PANEL}.getDocument()") is None
         await page.locator("#image-file").set_input_files(str(image_file))
@@ -1840,6 +1846,7 @@ async def check_option_bar_stays_visible(p, browser):
     async with panel(p, browser, viewport={"width": 1400, "height": 1000}) as page:
         await fill_text(page, "\n".join(f"строка {n}" for n in range(30)), "text")
         await settle(page)
+        await page.wait_for_function(f"() => {PANEL}.shadowRoot.querySelector('.live.pinned')")
         position = await page.evaluate(
             f"() => getComputedStyle({PANEL}.shadowRoot.querySelector('.live')).position"
         )
@@ -1852,6 +1859,328 @@ async def check_option_bar_stays_visible(p, browser):
                 selector,
             )
             assert rect[0] >= 0 and rect[1] <= rect[2] and rect[1] > rect[0], (selector, rect)
+
+
+STRIP_VISIBLE = f"""() => {{
+  const root = {PANEL}.shadowRoot;
+  const clip = root.querySelector('.canvas').getBoundingClientRect();
+  const stage = root.querySelector('.stage').getBoundingClientRect();
+  const live = root.querySelector('.live');
+  const top = Math.max(stage.top, clip.top, 0), bottom = Math.min(stage.bottom, clip.bottom, innerHeight);
+  return {{ visible: Math.max(0, bottom - top), stage: stage.height, position: getComputedStyle(live).position,
+    live: live.getBoundingClientRect().height, viewport: innerHeight, scrolls: {PANEL}.scrollHeight > {PANEL}.clientHeight }};
+}}"""
+LAYOUT_VIEWPORTS = ((1400, 900), (1366, 768), (390, 844))
+
+
+SWEEP = f"""async (selector) => {{
+  const measure = ({STRIP_VISIBLE});
+  const host = {PANEL}, el = host.shadowRoot.querySelector(selector);
+  const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const max = host.scrollHeight - host.clientHeight;
+  let worst = Infinity, positions = 0, last = null;
+  for (let top = 0; top <= max + 40; top += 40) {{
+    host.scrollTop = Math.min(top, max);
+    await frames();
+    const r = el.getBoundingClientRect();
+    if (r.top < 0 || r.bottom > innerHeight) continue; // only where the slider itself can be used
+    last = measure(); positions += 1; worst = Math.min(worst, last.visible);
+  }}
+  return {{ ...last, worst, positions }};
+}}"""
+
+
+LAYOUT_LOG = []  # (viewport, slider, least visible paper px, card height, position) per measured sweep
+
+
+async def assert_strip_visible_at(page, slider, where):
+    """Wherever the page is scrolled with the slider on screen, 240 px of the strip are on screen too."""
+    await page.wait_for_timeout(150)  # the layout observers run
+    seen = await page.evaluate(SWEEP, slider)
+    LAYOUT_LOG.append((where, slider, round(seen["worst"]), round(seen["live"]), seen["position"]))
+    assert seen["positions"] > 0, (where, slider, seen)
+    assert seen["worst"] >= min(240, seen["stage"]) - 0.5, (where, slider, seen)
+    # A pinned block must leave the rest of the page reachable: it never fills the viewport.
+    assert seen["position"] != "sticky" or seen["viewport"] - seen["live"] >= 150, (where, seen)
+    assert seen["position"] == "sticky" or seen["scrolls"], (where, seen)
+
+
+async def check_strip_stays_visible_with_options(p, browser, image_file):
+    """R17/R18: with a slider in use, 240 CSS px of the strip (or all of it) are on screen, unscrolled."""
+    for width, height in LAYOUT_VIEWPORTS:
+        where = f"{browser} {width}x{height}"
+        async with panel(p, browser, viewport={"width": width, "height": height}) as page:
+            await fill_text(page, "Заголовок", "title")
+            await fill_text(page, "\n".join(f"строка {n}" for n in range(12)), "text")
+            await settle(page)
+            for slider in ("#font_weight", "#font_width"):
+                await assert_strip_visible_at(page, slider, where)
+            await page.locator('[data-mode="image"]').click()
+            await page.locator("#image-file").set_input_files(str(image_file))
+            await page.wait_for_function(f"() => {PANEL}.image")
+            await settle(page)
+            await page.locator("#image-more summary").click()
+            for slider in ("#brightness", "#threshold"):
+                await assert_strip_visible_at(page, slider, f"{where} image")
+
+
+async def check_short_viewport_does_not_pin(p, browser):
+    """A landscape phone has no room for a pinned strip: the card scrolls and the page stays reachable."""
+    async with panel(p, browser, viewport={"width": 844, "height": 390}) as page:
+        await fill_text(page, "Заголовок", "title")
+        await settle(page)
+        await page.wait_for_timeout(150)
+        seen = await page.evaluate(STRIP_VISIBLE)
+        assert seen["position"] != "sticky" and seen["scrolls"], seen
+        await page.locator("#print").scroll_into_view_if_needed()
+        rect = await page.locator("#print").bounding_box()
+        assert 0 <= rect["y"] and rect["y"] + rect["height"] <= 390, rect
+
+
+async def check_notice_keeps_pin(p, browser):
+    """A notice (print result, error) never unpins the card, and a huge one cannot swallow the page."""
+    async with panel(p, browser, viewport={"width": 1366, "height": 768}) as page:
+        await type_title_and_text(page)
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        long_text = "Не удалось выполнить задание: " + "очень длинное сообщение об ошибке " * 60
+        await page.evaluate(f"(text) => {PANEL}.notice(text, true)", long_text)
+        await page.wait_for_timeout(150)
+        assert await page.evaluate(f"() => {live}.classList.contains('pinned')")
+        sizes = await page.evaluate(
+            f"""() => {{ const n = {PANEL}.shadowRoot.querySelector('#notice');
+              return [{live}.offsetHeight, {PANEL}.clientHeight, n.scrollHeight > n.clientHeight]; }}"""
+        )
+        assert sizes[0] <= sizes[1] - 50 and sizes[2], sizes  # the notice scrolls inside its cap
+        seen = await page.evaluate(SWEEP, "#font_weight")
+        assert seen["worst"] >= 240, seen
+        # Re-fitting the card must not move the strip's own scroll position.
+        await fill_text(page, "\n".join(f"строка {n}" for n in range(40)), "text")
+        await settle(page)
+        canvas = f"{PANEL}.shadowRoot.querySelector('.canvas')"
+        before = await page.evaluate(f"() => ({canvas}.scrollTop = 150, {canvas}.scrollTop)")
+        assert before > 0, before
+        await page.evaluate(f"() => {PANEL}.notice('Готово')")
+        await page.wait_for_timeout(150)
+        assert await page.evaluate(f"() => {canvas}.scrollTop") == before
+
+
+async def check_focus_clears_pinned_card(p, browser):
+    """A control below the pinned card that takes focus is moved out from behind it."""
+    async with panel(p, browser, viewport={"width": 1366, "height": 768}) as page:
+        await type_title_and_text(page)
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.evaluate(
+            f"() => {{ {PANEL}.shadowRoot.querySelector('#more-card').style.minHeight = '1600px'; }}"
+        )
+        await page.evaluate(
+            f"""() => {{ const host = {PANEL}, t = host.shadowRoot.querySelector('#template');
+              host.scrollTop = 600; host.scrollTop += t.getBoundingClientRect().top - 100; t.focus({{ preventScroll: true }}); }}"""
+        )
+        await page.wait_for_timeout(100)
+        gap = await page.evaluate(
+            f"""() => {{ const t = {PANEL}.shadowRoot.querySelector('#template');
+              return t.getBoundingClientRect().top - {live}.getBoundingClientRect().bottom; }}"""
+        )
+        assert gap >= 0, gap
+
+
+async def check_tab_into_editor_clears_pinned_card(p, browser):
+    """Tabbing out of the strip card into the editor card: the browser's own focus scroll leaves the control visible."""
+    async with panel(p, browser, viewport={"width": 1366, "height": 768}) as page:
+        await type_title_and_text(page)
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.locator("#font").focus()
+        for _ in range(60):
+            await page.keyboard.press("Tab")
+            inside = await page.evaluate(
+                f"() => Boolean({PANEL}.shadowRoot.activeElement?.closest('#editor-card'))"
+            )
+            if inside:
+                break
+        assert inside
+        await page.wait_for_timeout(150)
+        gap = await page.evaluate(
+            f"""() => {{ const e = {PANEL}.shadowRoot.activeElement;
+              return e.getBoundingClientRect().top - {live}.getBoundingClientRect().bottom; }}"""
+        )
+        assert gap >= 0, gap
+
+
+async def check_restored_focus_does_not_scroll(p, browser):
+    """Coming back to the window re-fires focus on the same control: the page the user scrolled stays put."""
+    async with panel(p, browser, viewport={"width": 1366, "height": 768}) as page:
+        await type_title_and_text(page)
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.evaluate(
+            f"() => {{ {PANEL}.shadowRoot.querySelector('#more-card').style.minHeight = '1600px'; }}"
+        )
+        await page.locator("#template").focus()
+        await page.evaluate(TWO_FRAMES)
+        await page.wait_for_timeout(700)  # past the press window
+        await page.evaluate(f"() => {{ {PANEL}.scrollTop = {PANEL}.scrollTop + 300; }}")
+        before = await page.evaluate(f"() => {PANEL}.scrollTop")
+        await page.evaluate(
+            f"() => {{ const t = {PANEL}.shadowRoot.querySelector('#template'); t.dispatchEvent(new FocusEvent('focusin', {{ bubbles: true, composed: true }})); }}"
+        )
+        await page.evaluate(TWO_FRAMES)
+        assert await page.evaluate(f"() => {PANEL}.scrollTop") == before
+
+
+async def check_returning_focus_after_the_strip_is_a_move(p, browser):
+    """Tab from the strip card back to the control that was focused before is corrected, not mistaken for a restore."""
+    async with panel(p, browser, viewport={"width": 1366, "height": 768}) as page:
+        await type_title_and_text(page)
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.evaluate(
+            f"() => {{ {PANEL}.shadowRoot.querySelector('#more-card').style.minHeight = '1600px'; }}"
+        )
+        tab = page.locator('[data-mode="template"]')
+        await tab.focus()
+        await page.wait_for_timeout(700)
+        await page.locator("#font_weight").focus()
+        await page.evaluate(f"() => {{ {PANEL}.scrollTop = 700; }}")
+        await page.evaluate(TWO_FRAMES)
+        await page.locator("#font_weight").focus()
+        for _ in range(60):
+            await page.keyboard.press("Tab")
+            if await page.evaluate(
+                f"() => {PANEL}.shadowRoot.activeElement?.dataset?.mode === 'template'"
+            ):
+                break
+        await page.wait_for_timeout(150)
+        gap = await page.evaluate(
+            f"""() => {{ const e = {PANEL}.shadowRoot.activeElement;
+              return e.getBoundingClientRect().top - {live}.getBoundingClientRect().bottom; }}"""
+        )
+        assert gap >= 0, gap
+
+
+async def check_unpinning_follows_with_a_button_focused(p, browser):
+    """A focused button (after Print, say) does not stop the card from following when it unpins."""
+    async with panel(p, browser, viewport={"width": 1400, "height": 900}) as page:
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.evaluate(
+            f"() => {{ {PANEL}.shadowRoot.querySelector('#refresh').focus(); {PANEL}.scrollTop = {PANEL}.scrollHeight; }}"
+        )
+        await page.set_viewport_size({"width": 1400, "height": 500})
+        await page.wait_for_function(f"() => !{live}.classList.contains('pinned')")
+        top = await page.evaluate(f"() => {live}.getBoundingClientRect().top")
+        assert -1 <= top <= 1, top
+
+
+async def check_pointer_press_is_not_scrolled_away(p, browser):
+    """Focus caused by a press must not move the page: the click would miss its target."""
+    async with panel(p, browser, viewport={"width": 1366, "height": 768}) as page:
+        await type_title_and_text(page)
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.evaluate(  # room to scroll the editor card up under the pinned card
+            f"() => {{ {PANEL}.shadowRoot.querySelector('#more-card').style.minHeight = '1600px'; }}"
+        )
+        spot = await page.evaluate(
+            f"""() => {{ const host = {PANEL}, t = host.shadowRoot.querySelector('#template');
+              host.scrollTop = 600; // the card is stuck now
+              host.scrollTop += t.getBoundingClientRect().top - ({live}.getBoundingClientRect().bottom - 10);
+              const r = t.getBoundingClientRect();
+              return [r.left + r.width / 2, {live}.getBoundingClientRect().bottom + 3, host.scrollTop]; }}"""
+        )
+        await page.mouse.click(spot[0], spot[1])
+        await page.evaluate(TWO_FRAMES)  # keepFocusClear runs a frame after the focus
+        await page.wait_for_timeout(50)
+        assert await page.evaluate(f"() => {PANEL}.scrollTop") == spot[2]
+        await page.keyboard.press("Escape")
+
+
+async def check_unpinning_keeps_the_card_in_view(p, browser):
+    """A card that stops fitting while the page is scrolled past it comes back to the top of the view."""
+    async with panel(p, browser, viewport={"width": 1400, "height": 900}) as page:
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.evaluate(f"() => {{ {PANEL}.scrollTop = {PANEL}.scrollHeight; }}")
+        await page.set_viewport_size({"width": 1400, "height": 500})
+        await page.wait_for_function(f"() => !{live}.classList.contains('pinned')")
+        top = await page.evaluate(f"() => {live}.getBoundingClientRect().top")
+        assert -1 <= top <= 1, top
+
+
+async def check_pin_follows_panel_height(p, browser):
+    """Only the panel height changes: the card unpins on a short panel and pins again on a tall one."""
+    async with panel(p, browser, viewport={"width": 1400, "height": 900}) as page:
+        live = f"{PANEL}.shadowRoot.querySelector('.live')"
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+        await page.set_viewport_size({"width": 1400, "height": 390})
+        await page.wait_for_function(f"() => !{live}.classList.contains('pinned')")
+        canvas = await page.evaluate(
+            f"() => {{ const c = {PANEL}.shadowRoot.querySelector('.canvas').style; return [c.minHeight, c.maxHeight]; }}"
+        )
+        assert canvas == ["", ""], canvas
+        await page.set_viewport_size({"width": 1400, "height": 900})
+        await page.wait_for_function(f"() => {live}.classList.contains('pinned')")
+
+
+async def check_printed_bytes_after_drag(p, browser):
+    """A real drag to an off-grid weight: nothing prints from the approximate render, the exact bytes go."""
+    async with panel(p, browser, viewport={"width": 1400, "height": 1000}) as page:
+        await type_title_and_text(page)
+        slider = page.locator("#font_weight")
+        box = await slider.bounding_box()
+        y = box["y"] + box["height"] / 2
+        x = box["x"] + box["width"] * 0.6
+        await page.mouse.move(box["x"] + box["width"] * 0.5, y)
+        await page.mouse.down()
+        await page.mouse.move(x, y, steps=4)
+        for _ in range(40):
+            if int(await slider.input_value()) % 50:
+                break
+            x += 1
+            await page.mouse.move(x, y)
+        value = int(await slider.input_value())
+        assert value % 50, value
+        await settle(page)
+        assert (await page.evaluate(LAST))["exact"] is False
+        assert await page.locator("#print").is_disabled()
+        await page.locator("#print").dispatch_event("click")
+        assert await calls(page, "print_bitmap") == []
+        await page.mouse.up()
+        await page.wait_for_function(
+            f"() => {PANEL}.lastResult?.exact === true && !{PANEL}.scheduler.pending"
+        )
+        assert await calls(page, "print_bitmap") == []
+        sent = await click_print(page)
+        _, expected = await reference(
+            page,
+            {**note(title="Заголовок", text="Широкий текст"), "options": {"font_weight": value}},
+        )
+        assert base64.b64decode(sent["bitmap_b64"]) == expected
+        assert len(await calls(page, "print_bitmap")) == 1
+
+
+async def check_blurred_window_releases_drag(p, browser):
+    """Alt-tab or a hidden tab mid-drag fires no pointer event: the exact render still lands."""
+    for event, hide in (("blur", False), ("visibilitychange", True)):
+        async with panel(p, browser) as page:
+            await type_title_and_text(page)
+            await set_range(page, "font_weight", 537, ("input",))
+            await settle(page)
+            assert (await page.evaluate(LAST))["exact"] is False
+            assert await page.locator("#print").is_disabled()
+            if hide:
+                await page.evaluate(
+                    "() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); document.dispatchEvent(new Event('visibilitychange')); }"
+                )
+            else:
+                await page.evaluate("() => window.dispatchEvent(new Event('blur'))")
+            # The request is made at once; a really hidden tab only renders it when frames resume.
+            assert await page.evaluate(f"() => {PANEL}.approximateRequested") is False, event
+            await settle(page)
+            assert (await page.evaluate(LAST))["exact"] is True, event
+            assert await page.locator("#print").is_enabled(), event
 
 
 CHECKS = [
@@ -1980,6 +2309,51 @@ CHECKS = [
     ("image mode shows only image options", check_image_mode_shows_only_image_options, True),
     ("option controls have Russian accessible names", check_option_controls_have_names, False),
     ("option bar and strip stay visible while scrolling", check_option_bar_stays_visible, False),
+    (
+        "the strip stays visible while option controls are used",
+        check_strip_stays_visible_with_options,
+        True,
+    ),
+    ("a short viewport does not pin the strip", check_short_viewport_does_not_pin, False),
+    (
+        "the strip is pinned only while the panel height allows",
+        check_pin_follows_panel_height,
+        False,
+    ),
+    ("a notice never unpins the strip", check_notice_keeps_pin, False),
+    ("focus is moved out from behind the pinned strip", check_focus_clears_pinned_card, False),
+    (
+        "a press is not scrolled away from under the pointer",
+        check_pointer_press_is_not_scrolled_away,
+        False,
+    ),
+    (
+        "returning focus after the strip card is corrected",
+        check_returning_focus_after_the_strip_is_a_move,
+        False,
+    ),
+    (
+        "a focused button does not stop the card following",
+        check_unpinning_follows_with_a_button_focused,
+        False,
+    ),
+    ("restored focus does not scroll the page", check_restored_focus_does_not_scroll, False),
+    (
+        "tabbing into the editor card clears the pinned strip",
+        check_tab_into_editor_clears_pinned_card,
+        False,
+    ),
+    ("an unpinned card stays in view", check_unpinning_keeps_the_card_in_view, False),
+    (
+        "printed bytes after a real slider drag equal the exact render",
+        check_printed_bytes_after_drag,
+        False,
+    ),
+    (
+        "a blurred window or hidden tab releases a slider drag",
+        check_blurred_window_releases_drag,
+        False,
+    ),
 ]
 
 
@@ -2020,6 +2394,8 @@ async def main() -> int:
                     line = traceback.extract_tb(error.__traceback__)[-1].lineno
                     failed.append(f"[{name}] {title}: {error!r} (line {line})")
                     print(f"FAIL [{name}] {title}: {error!r} (line {line})")
+    for row in LAYOUT_LOG:
+        print("layout", *row)
     report = {
         "checks": passed,
         "count": len(passed),
