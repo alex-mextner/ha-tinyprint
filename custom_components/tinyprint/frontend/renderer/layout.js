@@ -384,7 +384,10 @@ function placeParts(parts, border) {
   return { rows, border, blocks };
 }
 
-// Where a blank field's first line would be drawn, read off a plan that holds it as "x".
+// Where a blank field's first line would be drawn, read off a plan that holds it as "x". A text slot
+// also carries the size, alignment and metrics of that probe block: the one place a blank field's
+// type is decided, so an overlay on the slot styles itself exactly like the block that replaces it.
+const textFace = ({ size, align, ascent, descent, step }) => ({ size, align, ascent, descent, step });
 function slotOf(blocks, field) {
   for (const block of blocks) {
     if (block.field === field) {
@@ -392,13 +395,14 @@ function slotOf(blocks, field) {
         // The first line of the main text starts in the first column.
         const [first] = block.columns;
         const indent = block.checklist ? CHECK_INDENT : 0;
-        return { field, x: first.x + indent, y: block.text_y, w: first.w - indent, h: block.step };
+        return { field, x: first.x + indent, y: block.text_y, w: first.w - indent, h: block.step, ...textFace(block) };
       }
-      const h = block.kind === 'qr' ? block.h : block.step;
-      return { field, x: block.x, y: block.text_y, w: block.w, h };
+      if (block.kind === 'qr') return { field, x: block.x, y: block.text_y, w: block.w, h: block.h };
+      return { field, x: block.x, y: block.text_y, w: block.w, h: block.step, ...textFace(block) };
     }
     const anchor = block.anchors?.find((candidate) => candidate.field === field);
-    if (anchor) return { field, x: anchor.x, y: anchor.text_y, w: anchor.w, h: anchor.h };
+    // The anchor's x already holds the alignment: a value input always starts there.
+    if (anchor) return { field, x: anchor.x, y: anchor.text_y, w: anchor.w, h: anchor.h, ...textFace(block), align: 'left' };
   }
   return null;
 }

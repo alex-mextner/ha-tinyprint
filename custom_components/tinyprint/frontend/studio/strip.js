@@ -2,7 +2,6 @@
 // blocks) or docked below it. The strip image under an overlay is the crisp bitmap, so the overlay
 // shows only the native caret and selection; its text is transparent and uses the renderer's own face.
 import { BLANK } from '../renderer/index.js';
-import { derivedSize } from '../renderer/layout.js';
 
 /** Task 2 outcome (measured prefix widths and baseline, user-confirmed caret): 'overlay' | 'docked-all'. */
 export const EDIT_POLICY = 'overlay';
@@ -13,7 +12,6 @@ const LOOSE_ROW = { single: 44, multi: 96 }; // CSS px of an input shown without
 const LOOSE_GAP = 12;
 // The order the renderer stacks the fields: DOM (Tab) order follows what the eye follows.
 const VISUAL_ORDER = ['title', 'location', 'material', 'color', 'weight', 'nozzle', 'text', 'qr', 'footer'];
-const SPOOL_FIELDS = new Set(['material', 'color', 'weight', 'nozzle']);
 const CARET_COLOR = '#d6001c';
 
 /** Integer scales only (1x, 2x): any other factor resamples the 1-bit bitmap and blurs it.
@@ -36,12 +34,6 @@ export function fieldEditMode(field, { columns, policy, font, width }) {
   return 'overlay';
 }
 
-function sizeOfBlankField(key, template, face, fontSize) {
-  if (key === 'title') return derivedSize(face.entry, template === 'heading' ? 'heading' : 'title', fontSize);
-  if (key === 'footer') return derivedSize(face.entry, 'footer', fontSize);
-  return fontSize;
-}
-
 const px = (value) => `${Math.round(value * 100) / 100}px`;
 
 export class PaperStrip {
@@ -59,7 +51,7 @@ export class PaperStrip {
   #onInput = () => {};
   #result = null;
   #zoom = 1;
-  #context = {};
+  #area;
   #disabled = false;
 
   constructor(container) {
@@ -68,8 +60,8 @@ export class PaperStrip {
     this.#chips.id = 'chips';
     this.#chips.className = 'chips';
     this.#chips.hidden = true;
-    const canvasArea = document.createElement('div');
-    canvasArea.className = 'canvas';
+    this.#area = document.createElement('div');
+    this.#area.className = 'canvas';
     this.#empty = document.createElement('div');
     this.#empty.id = 'empty';
     this.#empty.className = 'empty';
@@ -96,24 +88,21 @@ export class PaperStrip {
     this.#layer.style.cssText = 'position:absolute;left:0;top:0';
     this.#box.append(this.#canvas, this.#layer);
     this.#stage.append(this.#box);
-    canvasArea.append(this.#empty, this.#stage);
+    this.#area.append(this.#empty, this.#stage);
     this.#docked = document.createElement('div');
     this.#docked.id = 'docked';
-    this.#container.append(this.#chips, canvasArea, this.#docked);
+    this.#container.append(this.#chips, this.#area, this.#docked);
   }
 
   /**
-   * Draws the result and places the inputs on its blocks. `context` = { template, fontSize, emptyText }:
-   * the size and role a blank field's slot needs (the result carries geometry only for drawn blocks).
-   * A result without pixels (nothing to draw, or a failure) keeps every input reachable in a plain stack.
+   * Draws the result and places the inputs on its blocks and slots. A result without pixels (nothing
+   * to draw, or a failure) shows `emptyText` and keeps every input reachable in a plain stack.
    */
-  show(result, zoom, context = {}) {
+  show(result, emptyText) {
     this.#result = result;
-    this.#zoom = zoom;
-    this.#context = context;
     const shown = Boolean(result?.pixels);
     this.#empty.hidden = shown;
-    this.#emptyText.textContent = context.emptyText ?? '';
+    this.#emptyText.textContent = emptyText;
     this.#canvas.hidden = !shown;
     if (shown) {
       if (this.#canvas.height !== result.rows) this.#canvas.height = result.rows;
@@ -125,9 +114,19 @@ export class PaperStrip {
     this.#place();
   }
 
+  get zoom() {
+    return this.#zoom;
+  }
+
   setZoom(zoom) {
     this.#zoom = zoom;
     this.#place();
+  }
+
+  /** CSS px the strip may occupy: the content box of the scroll area (its padding is not paper room). */
+  availableWidth() {
+    const style = getComputedStyle(this.#area);
+    return this.#area.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
   }
 
   /**
@@ -323,23 +322,9 @@ export class PaperStrip {
       }
     }
     const slot = slots.find((candidate) => candidate.field === key);
-    if (!slot || !face) return null;
-    const size = sizeOfBlankField(key, this.#context.template, face, this.#context.fontSize);
-    const centered = key === 'title' || key === 'footer';
-    const left = SPOOL_FIELDS.has(key) || this.#context.template === 'checklist';
-    return {
-      kind: 'slot',
-      x: slot.x,
-      y: slot.y,
-      w: slot.w,
-      h: slot.h,
-      step: slot.h,
-      size,
-      align: centered ? 'center' : left ? 'left' : (this.#context.align ?? 'left'),
-      ascent: face.ascent(size),
-      descent: face.descent(size),
-      face,
-    };
+    // A slot carries the type of the block that will replace it (layout.js `slotOf`); QR has none.
+    if (!slot || !face || slot.size === undefined) return null;
+    return { kind: 'slot', ...slot, face };
   }
 
   #place() {

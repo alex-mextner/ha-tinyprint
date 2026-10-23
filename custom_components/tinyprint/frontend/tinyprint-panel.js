@@ -57,8 +57,7 @@ class TinyPrintPanel extends HTMLElement {
     this.scheduler = null;
     this.strip = null;
     this.stripObserver = null;
-    this.zoom = 1;
-    this.zoomChosen = false; // until the user presses #zoom the card width picks the scale
+    this.zoomChosen = false; // until the user presses #zoom the strip's room picks the scale
     this.lastResult = null;
     this.failure = null;
     this.image = null;
@@ -133,7 +132,7 @@ class TinyPrintPanel extends HTMLElement {
         .devicebar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:22px; }
         .devicebar label { flex:1; min-width:210px; } .devicebar select { margin-top:4px; }
         .badge { border-radius:999px; background:var(--secondary-background-color,#e8eeed); padding:6px 12px; font-size:12px; }
-        .layout { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(310px,.85fr); align-items:start; gap:24px; }
+        .layout { display:grid; grid-template-columns:minmax(0,1fr); align-items:start; gap:24px; }
         .card { border:1px solid var(--divider-color,#dde1e7); background:var(--card-background-color,#fff); border-radius:16px; padding:22px; min-width:0; }
         .tabs { display:flex; gap:4px; padding:4px; border-radius:11px; background:var(--secondary-background-color,#edf0f3); margin-bottom:22px; }
         .tabs button { border:0; background:transparent; flex:1; padding:10px 6px; border-radius:8px; }
@@ -149,11 +148,11 @@ class TinyPrintPanel extends HTMLElement {
         .buttons { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
         .button { border:1px solid var(--divider-color,#cdd5dd); background:var(--card-background-color,#fff); border-radius:9px; padding:10px 15px; min-height:44px; }
         .primary { background:var(--primary-color,#007a73); border-color:transparent; color:var(--text-primary-color,#fff); font-weight:650; flex:1; }
-        .strip-card { position:sticky; top:18px; } h2 { margin:0; font-size:18px; } .strip-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
-        .canvas { background:var(--secondary-background-color,#edf0f3); border-radius:10px; min-height:300px; max-height:600px; overflow:auto; margin:18px 0 12px; padding:20px 12px; display:flex; flex-direction:column; align-items:safe center; }
+        .strip-card { min-width:0; } h2 { margin:0; font-size:18px; } .strip-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+        .canvas { background:var(--secondary-background-color,#edf0f3); border-radius:10px; min-height:300px; max-height:600px; overflow:auto; scrollbar-gutter:stable; margin:18px 0 12px; padding:20px 12px; display:flex; flex-direction:column; align-items:safe center; }
         .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; } .chip { border:1px dashed var(--secondary-text-color,#697580); background:transparent; border-radius:999px; padding:4px 12px; min-height:32px; font-size:13px; }
         .box { background:white; } .overlay::selection { background:rgba(0,122,115,.3); color:transparent; }
-        .overlay:not(.loose)::placeholder { color:transparent; opacity:1; } .overlay:not(.loose):focus-visible { outline-offset:0; } .overlay.slot:not(:focus) { pointer-events:none; }
+        .overlay:not(.loose)::placeholder { color:transparent; opacity:1; } .overlay:not(.loose):focus-visible { outline:2px solid var(--primary-color,#007a73); outline-offset:0; } .overlay.slot:not(:focus) { pointer-events:none; }
         #docked:not(:empty) { margin-top:16px; }
         .empty { padding:54px 12px; text-align:center; max-width:270px; color:var(--secondary-text-color,#697580); font-size:14px; }
         .empty .symbol { font-size:40px; display:block; margin-bottom:12px; }
@@ -164,7 +163,7 @@ class TinyPrintPanel extends HTMLElement {
         #notice.error { border-left:4px solid var(--error-color,#be3b3b); }
         pre { max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:11px; background:var(--secondary-background-color,#edf0f3); padding:12px; border-radius:8px; }
         [hidden] { display:none !important; }
-        @media(max-width:760px) { header { padding:14px 12px; gap:10px; } .local { display:none; } main { padding:14px 12px 32px; } .layout { grid-template-columns:1fr; gap:16px; } .card { padding:17px; } .strip-card { position:static; } .devicebar { gap:8px; } .devicebar .button { font-size:12px; } .canvas { max-height:450px; } }
+        @media(max-width:760px) { header { padding:14px 12px; gap:10px; } .local { display:none; } main { padding:14px 12px 32px; } .layout { gap:16px; } .card { padding:17px; } .devicebar { gap:8px; } .devicebar .button { font-size:12px; } .canvas { max-height:450px; } }
       </style>
       <header><ha-menu-button aria-label="Открыть меню"></ha-menu-button><div class="mark" aria-hidden="true">▤</div><div><div class="eyebrow">ЛОКАЛЬНАЯ ТЕРМОПЕЧАТЬ</div><h1>TinyPrint</h1></div><span class="local">Текст · QR · Изображения</span></header>
       <main>
@@ -205,7 +204,7 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#automation').addEventListener('toggle', () => this.showAction());
     this.$('#copy').addEventListener('click', () => this.copyAction());
     this.strip = new this.modules.strip.PaperStrip(this.$('#paper'));
-    this.strip.show(null, this.zoom, { emptyText: EMPTY_STRIP_TEXT });
+    this.strip.show(null, EMPTY_STRIP_TEXT);
     this.$('#zoom').addEventListener('click', () => { this.zoomChosen = true; this.setZoom(this.zoom === 1 ? 2 : 1); });
     this.stripObserver = new ResizeObserver(() => this.fitZoom());
     this.stripObserver.observe(this.$('#paper'));
@@ -459,25 +458,24 @@ class TinyPrintPanel extends HTMLElement {
     this.updateButtons(); this.showAction();
   }
   drawStrip(result, emptyText = result?.note ?? EMPTY_STRIP_TEXT) {
-    const options = this.effectiveOptions();
     // The modes follow the options (columns, font, width): refresh them before the strip places inputs.
     this.syncFields();
-    this.strip.show(result, this.zoom, { template: this.$('#template').value, fontSize: options.font_size, align: options.align, emptyText });
+    this.strip.show(result, emptyText);
     this.$('#dimensions').textContent = '';
     this.$('#ink').textContent = '';
     if (!result?.pixels) return;
     this.$('#dimensions').textContent = result.ghost ? 'Пример макета: введите свой текст' : `${this.$('#raster').width} × ${result.rows} точек`;
     if (!result.ghost && !result.partial) this.$('#ink').textContent = `Чёрного: ${Math.round(result.inkPercent * 100) / 100}%`;
   }
+  get zoom() { return this.strip?.zoom ?? 1; }
   /** 1x or 2x, never in between: a fractional scale would resample the 1-bit bitmap. */
   setZoom(zoom) {
-    this.zoom = zoom;
+    this.strip.setZoom(zoom);
     this.$('#zoom').textContent = `${zoom}×`;
     this.$('#zoom').setAttribute('aria-pressed', String(zoom === 2));
-    this.strip.setZoom(zoom);
   }
   fitZoom() {
-    if (!this.zoomChosen) this.setZoom(this.modules.strip.autoZoom(this.$('#paper').clientWidth - 24)); // .canvas has 12px side padding
+    if (!this.zoomChosen) this.setZoom(this.modules.strip.autoZoom(this.strip.availableWidth()));
   }
 
   /** Every Print blocker, derived from the scheduler's results and the CURRENT `hass`. */
