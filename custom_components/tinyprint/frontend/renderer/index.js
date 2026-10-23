@@ -72,7 +72,7 @@ function length(text) {
   return count;
 }
 // Python's str.strip() whitespace; JS trim() differs (it strips U+FEFF but not U+001C-1F, U+0085).
-const BLANK = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
+export const BLANK = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
 
 /** Multiples of `step` from 0, half up (475 -> 500 at step 50), clamped to [min, max]. */
 export function snapToGrid(value, step, min, max) {

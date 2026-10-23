@@ -2727,6 +2727,500 @@ async def check_renderer_qr_500(page):
     assert result["qrBlock"], result
 
 
+STATE_JS = f"{STATIC}studio/state.js"
+STATUS_JS = f"{STATIC}studio/status.js"
+OPTIONS_JS = f"{STATIC}studio/options.js"
+LIVE_JS = f"{STATIC}studio/live.js"
+ALL_GOOD = {
+    "deviceId": "dev1",
+    "hasInput": True,
+    "missing": [],
+    "textTooLong": False,
+    "renderPending": False,
+    "renderOk": True,
+    "renderExact": True,
+    "hasInk": True,
+    "inFlight": False,
+}
+BLOCKER_FLAGS = {
+    "no_device": {"deviceId": ""},
+    "no_input": {"hasInput": False},
+    "required_blank": {"missing": ["text"]},
+    "text_too_long": {"textTooLong": True},
+    "render_pending": {"renderPending": True},
+    "render_failed": {"renderOk": False},
+    "render_approximate": {"renderExact": False},
+    "no_ink": {"hasInk": False},
+    "job_in_flight": {"inFlight": True},
+}
+
+
+async def run_module(page, url, body, arg=None):
+    return await page.evaluate(
+        "async ([url, body, arg]) => { const m = await import(url);"
+        " return await (new Function('m', 'arg', `return (async () => { ${body} })()`))(m, arg); }",
+        [url, body, arg],
+    )
+
+
+def state_arg(**extra):
+    return {"templates": STUDIO.TEMPLATES, **extra}
+
+
+async def check_state_ghost(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """const s = { mode: 'template', template: 'note', fields: {}, qrText: '', hasImage: false };
+        const doc = m.effectiveDocument(s, arg.templates, {});
+        return { doc, input: m.hasUserInput(s),
+          blockers: m.printBlockers({ ...arg.good, hasInput: false }),
+          qr: m.effectiveDocument({ ...s, mode: 'qr' }, arg.templates, {}),
+          image: m.effectiveDocument({ ...s, mode: 'image' }, arg.templates, {}) };""",
+        state_arg(good=ALL_GOOD),
+    )
+    note = STUDIO.TEMPLATES["note"]["example"]
+    assert r["doc"]["ghost"] is True and r["doc"]["document"]["fields"] == note, r
+    assert r["doc"]["document"]["kind"] == "template" and r["doc"]["document"]["template"] == "note"
+    assert r["input"] is False and "no_input" in r["blockers"], r
+    assert r["qr"] == {"document": None, "ghost": False} or r["qr"]["document"] is None, r
+    assert r["image"]["document"] is None, r
+
+
+async def check_state_one_char(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """const s = { mode: 'template', template: 'note', fields: { title: 'a', text: '  ', footer: '' },
+          qrText: '', hasImage: false };
+        return m.effectiveDocument(s, arg.templates, { font_size: 30 });""",
+        state_arg(),
+    )
+    assert r["ghost"] is False, r
+    assert r["document"]["fields"] == {"title": "a"}, r
+    assert r["document"]["options"] == {"font_size": 30}, r
+
+
+async def check_state_too_long(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """const t = arg.templates;
+        const note = (fields) => ({ mode: 'template', template: 'note', fields, qrText: '', hasImage: false });
+        const qr = (text) => ({ mode: 'qr', template: 'note', fields: {}, qrText: text, hasImage: false });
+        const spool = (qrText) => ({ mode: 'template', template: 'qr_label', fields: { qr: qrText }, qrText: '', hasImage: false });
+        return {
+          field3001: m.textTooLong(note({ text: 'x'.repeat(3001) }), t),
+          field3000: m.textTooLong(note({ text: 'x'.repeat(3000) }), t),
+          qr501: m.textTooLong(qr('x'.repeat(501)), t),
+          qr500: m.textTooLong(qr('x'.repeat(500)), t),
+          tplQr501: m.textTooLong(spool('x'.repeat(501)), t),
+          tplQr500: m.textTooLong(spool('x'.repeat(500)), t),
+          two1600: m.textTooLong(note({ title: 'x'.repeat(1600), text: 'y'.repeat(1600) }), t),
+          two1500: m.textTooLong(note({ title: 'x'.repeat(1500), text: 'y'.repeat(1500) }), t),
+          emoji: m.textTooLong(note({ text: '\\u{1F600}'.repeat(2000) }), t),
+          qrNotCombined: m.textTooLong({ mode: 'template', template: 'storage_label',
+            fields: { title: 'x'.repeat(3000), qr: 'y'.repeat(500) }, qrText: '', hasImage: false }, t),
+          blockers: m.printBlockers({ ...arg.good, textTooLong: true }),
+        };""",
+        state_arg(good=ALL_GOOD),
+    )
+    assert r.pop("blockers") == ["text_too_long"]
+    expected = {k: k in {"field3001", "qr501", "tplQr501", "two1600"} for k in r}
+    assert r == expected, r
+
+
+async def check_state_blank(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """const base = { mode: 'template', template: 'note', fields: {}, qrText: '', hasImage: false };
+        return {
+          blank: ['', ' ', '\\n\\t ', '\\u00a0\\u3000', '\\u001c', null, undefined, 5].map((v) => m.isBlank(v)),
+          nonblank: ['a', ' a '].map((v) => m.isBlank(v)),
+          ws: m.hasUserInput({ ...base, fields: { title: '\\n\\t ' } }),
+          one: m.hasUserInput({ ...base, fields: { footer: 'x' } }),
+          image: m.hasUserInput({ ...base, mode: 'image', hasImage: true }),
+          noImage: m.hasUserInput({ ...base, mode: 'image' }),
+          qr: m.hasUserInput({ ...base, mode: 'qr', qrText: 'https://x' }),
+          qrBlank: m.hasUserInput({ ...base, mode: 'qr', qrText: '  ' }),
+          qrIgnoresStaleFields: m.hasUserInput({ ...base, mode: 'qr', fields: { title: 'a' } }),
+        };""",
+    )
+    assert r["blank"] == [True] * 7 + [True], r
+    assert r["nonblank"] == [False, False], r
+    assert (r["ws"], r["one"], r["image"], r["noImage"], r["qr"], r["qrBlank"]) == (
+        False,
+        True,
+        True,
+        False,
+        True,
+        False,
+    ), r
+    assert r["qrIgnoresStaleFields"] is False, r
+
+
+async def check_state_required(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """const s = { mode: 'template', template: 'note', fields: { title: 'Hi' }, qrText: '', hasImage: false };
+        const missing = m.missingRequired(s, arg.templates);
+        return { missing,
+          ok: m.missingRequired({ ...s, fields: { text: 'x' } }, arg.templates),
+          qrMode: m.missingRequired({ ...s, mode: 'qr' }, arg.templates),
+          multi: m.missingRequired({ ...s, template: 'qr_label', fields: {} }, arg.templates),
+          blockers: m.printBlockers({ ...arg.good, missing }),
+          text: m.BLOCKER_TEXT };""",
+        state_arg(good=ALL_GOOD),
+    )
+    assert r["missing"] == ["text"] and r["ok"] == [] and r["qrMode"] == [], r
+    assert r["multi"] == ["qr"], r
+    assert r["blockers"] == ["required_blank"], r
+    assert set(r["text"]) == set(BLOCKER_FLAGS), r
+    assert all(
+        isinstance(v, str) and any("а" <= c.lower() <= "я" for c in v) for v in r["text"].values()
+    )
+
+
+async def check_state_blockers(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """const out = { all: m.printBlockers(arg.good), order: m.BLOCKERS };
+        out.single = {};
+        for (const [code, flags] of Object.entries(arg.flags)) out.single[code] = m.printBlockers({ ...arg.good, ...flags });
+        out.nullDevice = m.printBlockers({ ...arg.good, deviceId: null });
+        out.everything = m.printBlockers({ deviceId: '', hasInput: false, missing: ['a'], textTooLong: true,
+          renderPending: true, renderOk: false, renderExact: false, hasInk: false, inFlight: true });
+        out.pair = m.printBlockers({ ...arg.good, renderOk: false, renderExact: true });
+        out.pair2 = m.printBlockers({ ...arg.good, renderOk: true, renderExact: false, hasInk: false });
+        return out;""",
+        state_arg(good=ALL_GOOD, flags=BLOCKER_FLAGS),
+    )
+    order = list(BLOCKER_FLAGS)
+    assert r["order"] == order and r["all"] == [], r
+    for code in order:
+        assert r["single"][code] == [code], (code, r["single"][code])
+    assert r["nullDevice"] == ["no_device"], r
+    assert r["everything"] == order, r
+    assert r["pair"] == ["render_failed"] and r["pair2"] == ["render_approximate", "no_ink"], r
+
+
+async def check_state_drafts(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """let d = m.emptyDrafts();
+        d = m.withDraftField(d, 'note', 'text', 'milk');
+        const heading = m.draftFor(d, 'heading');
+        d = m.withDraftField(d, 'heading', 'title', 'BIG');
+        const before = JSON.stringify(d);
+        const frozen = m.withDraftField(d, 'note', 'title', 'x');
+        return { heading, note: m.draftFor(d, 'note'), again: m.draftFor(d, 'heading'),
+          untouched: JSON.stringify(d) === before, frozen: m.draftFor(frozen, 'note'),
+          fresh: m.draftFor(m.emptyDrafts(), 'note') };""",
+    )
+    assert r["heading"] == {} and r["note"] == {"text": "milk"}, r
+    assert r["again"] == {"title": "BIG"} and r["untouched"] is True, r
+    assert r["frozen"] == {"text": "milk", "title": "x"} and r["fresh"] == {}, r
+
+
+async def check_state_printable(page):
+    r = await run_module(
+        page,
+        STATE_JS,
+        """const bitmap = new Uint8Array(48 * 2); bitmap[5] = 1;
+        const exact = { generation: 4, exact: true, ghost: false, document: { kind: 'text' }, bitmap };
+        const view = (result, generation, pending) => m.printableResult(result, { generation, pending });
+        const pixels = new ImageData(new Uint8ClampedArray(384 * 2 * 4).fill(7), 384, 2);
+        const kept = m.keepResult({ ...exact, pixels });
+        pixels.data.fill(0); bitmap[5] = 0;
+        return {
+          ok: view(exact, 4, false) === exact,
+          older: view(exact, 5, false), inFlight: view(exact, 4, true), none: view(null, 4, false),
+          approx: view({ ...exact, exact: false, document: null }, 4, false),
+          noDoc: view({ ...exact, document: null }, 4, false),
+          ghost: view({ ...exact, ghost: true }, 4, false),
+          keptPixel: kept.pixels.data[0], keptSame: kept.pixels === pixels, keptBit: kept.bitmap[5],
+          inkYes: m.bitmapHasInk(new Uint8Array([0, 0, 8])), inkNo: m.bitmapHasInk(new Uint8Array(4)),
+          inkNull: m.bitmapHasInk(null),
+        };""",
+    )
+    assert r["ok"] is True and r["older"] is None and r["inFlight"] is None and r["none"] is None, r
+    assert r["approx"] is None and r["noDoc"] is None and r["ghost"] is None, r
+    assert r["keptPixel"] == 7 and r["keptSame"] is False and r["keptBit"] == 1, r
+    assert (r["inkYes"], r["inkNo"], r["inkNull"]) == (True, False, False), r
+
+
+async def check_status(page):
+    r = await run_module(
+        page,
+        STATUS_JS,
+        """const flight = ['rendering', 'connecting', 'printing'];
+        const o = (state) => ({ state });
+        const states = ['unknown', 'unavailable', 'idle', 'sent', 'error', 'rendering', 'connecting', 'printing'];
+        return {
+          flags: Object.fromEntries(states.map((s) => [s, m.jobInFlight(o(s), flight)])),
+          missing: m.jobInFlight(undefined, flight), nul: m.jobInFlight(null, flight),
+          text: Object.fromEntries(states.map((s) => [s, m.statusText(o(s))])),
+          undef: m.statusText(undefined),
+          later: m.statusText(o('waiting_for_printer')),
+          laterFlight: m.jobInFlight(o('waiting_for_printer'), [...flight, 'waiting_for_printer']),
+          table: m.STATUS_TEXT,
+        };""",
+    )
+    inflight = {"rendering", "connecting", "printing"}
+    assert all(v == (k in inflight) for k, v in r["flags"].items()), r["flags"]
+    assert r["missing"] is False and r["nul"] is False and r["laterFlight"] is True, r
+    for k, v in r["text"].items():
+        assert (v is not None) == (k in inflight), r["text"]
+    assert r["undef"] is None, r
+    assert set(r["table"]) >= inflight and all(isinstance(v, str) for v in r["table"].values()), r
+    assert isinstance(r["later"], str) and r["later"], r
+
+
+async def check_options_hint(page):
+    cases = [
+        (24, 100, 701, True), (23, 100, 701, True), (24, 100, 700, False), (25, 100, 701, False),
+        (71, 99, 1000, True), (72, 99, 1000, False), (71, 100, 1000, False), (71, 99, 999, False),
+        (30, 49, 801, True), (30, 49, 800, False), (30, 50, 801, False),
+    ]  # fmt: skip
+    r = await run_module(
+        page,
+        OPTIONS_JS,
+        """return { roboto: arg.map(([s, w, wt]) => m.closingCounterHint('roboto_flex', s, w, wt)),
+          tiny: [[8, 25, 1000], [24, 100, 900]].map(([s, w, wt]) => m.closingCounterHint('tiny5', s, w, wt)) };""",
+        [c[:3] for c in cases],
+    )
+    for case, got in zip(cases, r["roboto"], strict=True):
+        assert (isinstance(got, str) and bool(got)) == case[3] and (got is None or got), (case, got)
+        assert case[3] or got is None, (case, got)
+    assert r["tiny"] == [None, None], r
+
+
+async def check_options_snap_and_coerce(page):
+    r = await run_module(
+        page,
+        OPTIONS_JS,
+        """const fonts = arg.fonts;
+        const base = { font: 'roboto_flex', font_size: 20, font_width: 50, font_weight: 900, columns: 2, threshold: 99 };
+        return {
+          snaps: [m.snapToGrid(37, 5, 25, 151), m.snapToGrid(480, 50, 100, 1000), m.snapToGrid(475, 50, 100, 1000),
+            m.snapToGrid(1000, 50, 100, 1000), m.snapToGrid(5000, 50, 100, 1000), m.snapToGrid(1, 50, 100, 1000)],
+          steps: [m.APPROX_WIDTH_STEP, m.APPROX_WEIGHT_STEP],
+          tiny: m.coerceForFont(base, fonts, 'tiny5'),
+          tie28: m.coerceForFont({ ...base, font: 'tiny5', font_size: 24, font_width: 100, font_weight: 400 }, fonts, 'tiny5'),
+          tie12: m.coerceForFont({ ...base, font_size: 12 }, fonts, 'tiny5').font_size,
+          tie36: m.coerceForFont({ ...base, font_size: 36 }, fonts, 'tiny5').font_size,
+          big: m.coerceForFont({ ...base, font_size: 90 }, fonts, 'tiny5').font_size,
+          back: m.coerceForFont({ ...base, font: 'tiny5', font_size: 8, font_width: 200, font_weight: 400 }, fonts, 'roboto_flex'),
+          sameKept: m.coerceForFont(base, fonts, 'roboto_flex'),
+          sameSize: m.coerceForFont({ ...base, font_size: 8 }, fonts, 'roboto_flex').font_size,
+          input: base,
+        };""",
+        {"fonts": FONTS},
+    )
+    assert r["snaps"] == [35, 500, 500, 1000, 1000, 100], r
+    assert r["steps"] == [5, 50], r
+    assert r["tiny"] == {
+        "font": "tiny5", "font_size": 16, "font_width": 100, "font_weight": 400, "columns": 2, "threshold": 99,
+    }, r  # fmt: skip
+    assert r["tie28"]["font_size"] == 24, r
+    assert (r["tie12"], r["tie36"], r["big"]) == (8, 32, 48), r
+    assert r["back"]["font_width"] == 100 and r["back"]["font_weight"] == 400, r
+    assert r["back"]["font_size"] == 12 and r["back"]["columns"] == 2, r
+    assert r["sameKept"] == r["input"] and r["sameSize"] == 12, r
+
+
+async def check_options_preset_and_browser_only(page):
+    r = await run_module(
+        page,
+        OPTIONS_JS,
+        """const o = { preset: 'photo', method: 'floyd_steinberg', contrast: 1.25, brightness: 1.1, sharpness: 1.2,
+          threshold: 77, columns: 1 };
+        const applied = m.applyPreset(o, arg.presets, 'line_art');
+        let error = null;
+        try { m.applyPreset(o, arg.presets, 'nope'); } catch (e) { error = String(e); }
+        return { applied, input: o, error,
+          flags: [{ columns: 1, font: 'roboto_flex', font_width: 100 }, { columns: 2 }, { columns: 3, font: 'tiny5' },
+            { columns: 1, font: 'tiny5', font_width: 200 }, { columns: 1, font: 'tiny5', font_width: 100 },
+            { columns: 1, font: 'roboto_flex', font_width: 200 }, {}].map((x) => m.usesBrowserOnlyOptions(x)) };""",
+        {"presets": STUDIO.PRESETS},
+    )
+    line = {k: v for k, v in STUDIO.PRESETS["line_art"].items() if k != "name"}
+    assert r["applied"] == {
+        "preset": "line_art", **line, "threshold": 77, "columns": 1,
+    }, r  # fmt: skip
+    assert r["input"]["preset"] == "photo" and r["error"], r
+    assert r["flags"] == [False, True, True, True, False, False, False], r
+
+
+LIVE_PRELUDE = """
+const frames = [];
+const raf = (cb) => { frames.push(cb); return frames.length; };
+const frame = () => { const batch = frames.splice(0); for (const cb of batch) cb(0); };
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
+const results = [], errors = [], runs = [];
+const make = (run) => new m.RenderScheduler(run, (r) => results.push(r), (e, g) => errors.push([String(e.message), g]), raf);
+"""
+
+
+async def check_live_coalesce(page):
+    r = await run_module(
+        page,
+        LIVE_JS,
+        LIVE_PRELUDE
+        + """const s = make(async (input, g) => { runs.push([input, g]); return { generation: g, tag: input }; });
+        const built = [];
+        let last;
+        for (let i = 0; i < 50; i += 1) last = s.request(() => { built.push(i); return `in${i}`; });
+        const before = { runs: runs.length, pending: s.pending, frames: frames.length };
+        frame(); await tick();
+        return { before, runs, built, last, generation: s.generation, results, pending: s.pending, frames: frames.length };""",
+    )
+    assert r["before"] == {"runs": 0, "pending": True, "frames": 1}, r
+    assert r["runs"] == [["in49", 50]] and r["built"] == [49], r
+    assert r["last"] == 50 and r["generation"] == 50, r
+    assert r["results"] == [{"generation": 50, "tag": "in49"}] and r["pending"] is False, r
+    assert r["frames"] == 0, r
+
+
+async def check_live_no_overlap(page):
+    r = await run_module(
+        page,
+        LIVE_JS,
+        LIVE_PRELUDE
+        + """const gates = [];
+        let active = 0, maxActive = 0;
+        const s = make(async (input, g) => {
+          runs.push([input, g]); active += 1; maxActive = Math.max(maxActive, active);
+          const d = deferred(); gates.push(d); const r = await d.promise; active -= 1; return r;
+        });
+        s.request(() => 'a'); frame(); await tick();
+        const afterFirst = runs.length;
+        s.request(() => 'b'); s.request(() => 'c'); s.request(() => 'd');
+        frame(); await tick(); frame(); await tick();
+        const duringFirst = runs.length;
+        gates[0].resolve({ generation: 1 }); await tick();
+        const framesAfterSettle = frames.length;
+        frame(); await tick();
+        const secondStarted = runs.length;
+        gates[1].resolve({ generation: 4 }); await tick();
+        frame(); await tick();
+        return { afterFirst, duringFirst, framesAfterSettle, secondStarted, runs, maxActive, results, pending: s.pending,
+          runsAtEnd: runs.length };""",
+    )
+    assert (r["afterFirst"], r["duringFirst"]) == (1, 1), r
+    assert r["framesAfterSettle"] == 1 and r["secondStarted"] == 2, r
+    assert r["runs"] == [["a", 1], ["d", 4]] and r["maxActive"] == 1, r
+    assert r["results"] == [{"generation": 4}] and r["pending"] is False and r["runsAtEnd"] == 2, r
+
+
+async def check_live_last_edit_kept(page):
+    """The edit made while a render is in flight is never dropped (the old `if (busy) return` bug)."""
+    r = await run_module(
+        page,
+        LIVE_JS,
+        LIVE_PRELUDE
+        + """const gates = [];
+        const s = make(async (input, g) => { runs.push(input); const d = deferred(); gates.push(d); await d.promise; return { generation: g, input }; });
+        s.request(() => 'first'); frame(); await tick();
+        s.request(() => 'last-edit');
+        gates[0].resolve(); await tick(); frame(); await tick();
+        gates[1].resolve(); await tick();
+        return { runs, results };""",
+    )
+    assert r["runs"] == ["first", "last-edit"], r
+    assert r["results"] == [{"generation": 2, "input": "last-edit"}], r
+
+
+async def check_live_stale_discarded(page):
+    r = await run_module(
+        page,
+        LIVE_JS,
+        LIVE_PRELUDE
+        + """const gates = [];
+        const s = make(async (input, g) => { const d = deferred(); gates.push(d); const v = await d.promise; return { generation: g, v }; });
+        s.request(() => 1); frame(); await tick();
+        const g2 = s.request(() => 2);
+        gates[0].resolve('old'); await tick();
+        const afterStale = { results: results.slice(), pending: s.pending };
+        frame(); await tick(); gates[1].resolve('new'); await tick();
+        return { afterStale, results, g2, pending: s.pending };""",
+    )
+    assert r["afterStale"] == {"results": [], "pending": True}, r
+    assert r["results"] == [{"generation": 2, "v": "new"}] and r["pending"] is False, r
+
+
+async def check_live_pending(page):
+    r = await run_module(
+        page,
+        LIVE_JS,
+        LIVE_PRELUDE
+        + """const d = deferred();
+        const s = make(async () => d.promise);
+        const p0 = s.pending;
+        s.request(() => 1);
+        const p1 = s.pending; frame(); await tick();
+        const p2 = s.pending; d.resolve({ generation: 1 }); await tick();
+        return [p0, p1, p2, s.pending];""",
+    )
+    assert r == [False, True, True, False], r
+
+
+async def check_live_errors(page):
+    r = await run_module(
+        page,
+        LIVE_JS,
+        LIVE_PRELUDE
+        + """const gates = [];
+        const s = make(async (input) => { if (input === 'sync') throw new Error('sync boom'); const d = deferred(); gates.push(d); return d.promise; });
+        s.request(() => 'a'); frame(); await tick();
+        s.request(() => 'b');
+        gates[0].reject(new Error('stale boom')); await tick();
+        const afterStale = { errors: errors.slice(), pending: s.pending };
+        frame(); await tick(); gates[1].reject(new Error('current boom')); await tick();
+        const afterCurrent = { errors: errors.slice(), pending: s.pending };
+        s.request(() => 'sync'); frame(); await tick();
+        s.request(() => { throw new Error('build boom'); }); frame(); await tick();
+        return { afterStale, afterCurrent, errors, pending: s.pending, results };""",
+    )
+    assert r["afterStale"] == {"errors": [], "pending": True}, r
+    assert r["afterCurrent"] == {"errors": [["current boom", 2]], "pending": False}, r
+    assert r["errors"] == [["current boom", 2], ["sync boom", 3], ["build boom", 4]], r
+    assert r["pending"] is False and r["results"] == [], r
+
+
+async def check_live_dispose(page):
+    r = await run_module(
+        page,
+        LIVE_JS,
+        LIVE_PRELUDE
+        + """const d = deferred();
+        const s = make(async () => d.promise);
+        s.request(() => 1); frame(); await tick();
+        s.dispose(); d.resolve({ generation: 1 }); await tick();
+        s.request(() => 2); frame(); await tick();
+        return { results, errors, runs: runs.length };""",
+    )
+    assert r == {"results": [], "errors": [], "runs": 0}, r
+
+
+async def check_live_real_raf(page):
+    r = await run_module(
+        page,
+        LIVE_JS,
+        """const results = [];
+        const s = new m.RenderScheduler(async (i, g) => ({ generation: g, i }), (x) => results.push(x), () => {});
+        for (let i = 0; i < 5; i += 1) s.request(() => i);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return results;""",
+    )
+    assert r == [{"generation": 5, "i": 4}], r
+
+
 CHECKS = [
     ("pack: bit order and alpha threshold", check_pack_bits),
     ("pack: bytesToBase64 round-trips 98,304 bytes without a RangeError", check_base64),
@@ -2866,6 +3360,35 @@ CHECKS = [
     ),
     ("renderer: the 2048 row cap gives too_tall on every path", check_renderer_row_cap),
     ("renderer: a 500-character QR does not crash", check_renderer_qr_500),
+    ("state: all blank gives a ghost and no_input", check_state_ghost),
+    ("state: one character removes every example", check_state_one_char),
+    ("state: text over the Python limits is blocked", check_state_too_long),
+    ("state: whitespace-only counts as blank, image and QR text as input", check_state_blank),
+    ("state: the missing required field is named", check_state_required),
+    (
+        "state: each failing condition yields exactly its code, in BLOCKERS order",
+        check_state_blockers,
+    ),
+    ("state: switching templates keeps each draft", check_state_drafts),
+    (
+        "state: only a current exact result is printable, pixels are copied",
+        check_state_printable,
+    ),
+    ("status: only the in-flight states are in flight and labelled", check_status),
+    ("options: closingCounterHint follows the spec rule", check_options_hint),
+    ("options: snapToGrid and coerceForFont", check_options_snap_and_coerce),
+    (
+        "options: applyPreset copies the preset values; browser-only options",
+        check_options_preset_and_browser_only,
+    ),
+    ("live: 50 requests inside one frame run once with the latest input", check_live_coalesce),
+    ("live: runs never overlap, only the latest queued request runs", check_live_no_overlap),
+    ("live: the last edit made during a render is never dropped", check_live_last_edit_kept),
+    ("live: a stale result is discarded", check_live_stale_discarded),
+    ("live: pending is true until the current result arrives", check_live_pending),
+    ("live: stale rejections are ignored, current ones reach onError", check_live_errors),
+    ("live: dispose silences the scheduler", check_live_dispose),
+    ("live: default frame callback coalesces", check_live_real_raf),
 ]
 
 
