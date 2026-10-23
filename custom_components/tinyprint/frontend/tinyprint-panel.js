@@ -80,6 +80,7 @@ class TinyPrintPanel extends HTMLElement {
     this.failure = null;
     this.image = null;
     this.noticeFromRender = false;
+    this.checkNotice = '';
     this.pendingCall = false;
     this.printing = false;
     this.activeDevice = '';
@@ -245,7 +246,7 @@ class TinyPrintPanel extends HTMLElement {
             </fieldset>
             <div class="buttons"><button id="print" class="button primary" disabled>Печатать</button><button id="cancel" class="button" hidden>Остановить</button></div>
           </section>
-          <section id="more-card" class="card more" aria-label="Диагностика и автоматизация"><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
+          <section id="more-card" class="card more" aria-label="Диагностика и автоматизация"><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre><p class="hint">Проверка рендерера ничего не печатает и не отправляет: она только рисует тестовую надпись на этом устройстве.</p><button id="renderer-check" class="button">Проверить рендерер</button> <button id="renderer-check-copy" class="button" hidden>Скопировать результат</button><pre id="renderer-check-data"></pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
         </div>
       </main>`;
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => this.switchMode(button.dataset.mode)));
@@ -270,6 +271,8 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#cancel').addEventListener('click', () => this.cancel());
     this.$('#refresh').addEventListener('click', () => { if (this.failure) this.renderNow(); this.loadInfo(); });
     this.$('#diagnose').addEventListener('click', () => this.diagnose());
+    this.$('#renderer-check').addEventListener('click', () => this.checkRenderer());
+    this.$('#renderer-check-copy').addEventListener('click', () => this.copyRendererCheck());
     this.$('#automation').addEventListener('toggle', () => this.showAction());
     this.$('#copy').addEventListener('click', () => this.copyAction());
     this.strip = new this.modules.strip.PaperStrip(this.$('#paper'));
@@ -763,6 +766,50 @@ class TinyPrintPanel extends HTMLElement {
       ? 'Печать картинки из автоматизации использует сервис print_document с image_base64 или разрешённым локальным path; панель такой документ не строит.'
       : this.browserOnly() ? BROWSER_ONLY_NOTICE
       : (action ? JSON.stringify(action, null, 2) : 'Введите данные: действие появится, когда лента отрисована точно.');
+  }
+  /** Runs the renderer's self-test on this device and shows plain text a user can paste into a message. */
+  async checkRenderer() {
+    const button = this.$('#renderer-check'), output = this.$('#renderer-check-data');
+    if (button.disabled) return;
+    this.$('#diagnostics').open = true;
+    if (!this.renderer) { output.textContent = 'SELFTEST FAIL renderer_not_ready\nРендерер ещё не создан: нажмите «Обновить» и повторите.'; return; }
+    const epoch = this.epoch;
+    button.disabled = true;
+    // The failure message of the previous run must not outlive a re-run that passes.
+    if (this.checkNotice && this.$('#notice').textContent === this.checkNotice) {
+      if (this.failure) { this.showNotice(this.describe(this.failure), true); this.noticeFromRender = true; }
+      else this.notice('');
+    }
+    this.checkNotice = '';
+    output.textContent = 'Проверяю…';
+    this.$('#renderer-check-copy').hidden = true;
+    try {
+      const report = await this.renderer.selfTest();
+      if (epoch !== this.epoch) return;
+      const failed = report.checks.find(check => !check.ok);
+      const lines = [
+        `canvas: ${report.engine.offscreenCanvas ? 'OffscreenCanvas' : 'HTMLCanvasElement'}`,
+        `userAgent: ${report.engine.userAgent}`,
+        `devicePixelRatio: ${window.devicePixelRatio}`,
+        ...report.checks.map(check => `${check.ok ? 'PASS' : 'FAIL'} ${check.name}: ${check.detail}`),
+        failed ? `SELFTEST FAIL ${failed.name}` : 'SELFTEST PASS',
+      ];
+      output.textContent = lines.join('\n');
+      this.$('#renderer-check-copy').hidden = !navigator.clipboard?.writeText;
+      // A pass never replaces a message that is already on screen (render or print error, progress).
+      // A failure does, and like a render error it goes away with the next successful render.
+      if (failed) {
+        this.checkNotice = `Проверка рендерера не пройдена: ${failed.name}. Покажите результат из диагностики.`;
+        this.notice(this.checkNotice, true); this.noticeFromRender = true;
+      }
+      else if (this.$('#notice').hidden) this.notice('Проверка рендерера пройдена.');
+    } catch (error) {
+      if (epoch === this.epoch) { output.textContent = 'SELFTEST FAIL selftest_error'; this.notice('Проверка рендерера не завершилась. Попробуйте ещё раз.', true); }
+    } finally { if (epoch === this.epoch) button.disabled = false; }
+  }
+  async copyRendererCheck() {
+    try { await navigator.clipboard.writeText(this.$('#renderer-check-data').textContent); this.notice('Результат проверки скопирован.'); }
+    catch (error) { this.notice('Буфер обмена недоступен в этом браузере. Текст результата можно выделить вручную.', true); }
   }
   async copyAction() {
     const action = this.action();

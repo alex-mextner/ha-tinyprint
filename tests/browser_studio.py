@@ -872,6 +872,110 @@ async def check_diagnose_never_prints(p, browser):
         assert not await calls(page, "print_bitmap")
 
 
+async def run_renderer_check(page):
+    if not await page.locator("#renderer-check").is_visible():
+        await page.locator("#diagnostics > summary").click()
+    await page.locator("#renderer-check").click()
+    await page.wait_for_function(
+        "() => /SELFTEST (PASS|FAIL)/.test("
+        f"{PANEL}.shadowRoot.querySelector('#renderer-check-data').textContent)"
+    )
+    return await page.locator("#renderer-check-data").text_content()
+
+
+def verdict(output):
+    last = output.rstrip("\n").split("\n")[-1]
+    assert last.startswith("SELFTEST "), output
+    return last
+
+
+async def panel_snapshot(page):
+    return await page.evaluate(
+        f"""() => {{
+          const p = {PANEL};
+          const canvas = p.shadowRoot.querySelector('#raster');
+          return {{
+            document: JSON.stringify(p.getDocument()),
+            print: p.shadowRoot.querySelector('#print').disabled,
+            generation: p.scheduler.generation,
+            raster: canvas.toDataURL(),
+          }};
+        }}"""
+    )
+
+
+async def check_renderer_check_passes(p, browser):
+    async with panel(p, browser) as page:
+        await fill_text(page, "Проверка")
+        await settle(page)
+        before = await panel_snapshot(page)
+        sent = len(await calls(page))
+        first = await run_renderer_check(page)
+        assert verdict(first) == "SELFTEST PASS", first
+        assert first.count("PASS") >= 5 and "FAIL" not in first.replace("SELFTEST", ""), first
+        assert "devicePixelRatio" in first and "OffscreenCanvas" in first, first
+        assert "Проверка" not in first and "test-printer" not in first, first
+        # Pasting it elsewhere must give the same text the second time.
+        assert await run_renderer_check(page) == first
+        assert await panel_snapshot(page) == before
+        assert len(await calls(page)) == sent  # no service, no print
+        await fill_text(page, "Другое")
+        await settle(page)
+        assert await page.locator("#print").is_enabled()
+        assert (await panel_snapshot(page))["raster"] != before["raster"]
+
+
+async def check_renderer_check_without_clipboard(p, browser):
+    async with panel(p, browser, no_offscreen=True) as page:
+        await page.evaluate(
+            "() => Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })"
+        )
+        output = await run_renderer_check(page)
+        assert verdict(output) == "SELFTEST PASS", output
+        assert "HTMLCanvasElement" in output, output
+        assert await page.locator("#renderer-check-copy").is_hidden()
+        assert await run_renderer_check(page) == output
+        assert await page.locator("#renderer-check").is_enabled()
+
+
+async def check_renderer_check_copies(p, browser):
+    async with panel(p, browser) as page:
+        await page.evaluate(
+            "() => Object.defineProperty(navigator, 'clipboard', "
+            "{ value: { writeText: async (text) => { window.copied = text; } }, configurable: true })"
+        )
+        output = await run_renderer_check(page)
+        await page.locator("#renderer-check-copy").click()
+        await page.wait_for_function("() => window.copied !== undefined")
+        assert await page.evaluate("() => window.copied") == output
+
+
+async def check_renderer_check_reports_failure(p, browser):
+    async with panel(p, browser, settle=False, missing_font=True) as page:
+        await page.wait_for_function(SETTLED)
+        await fill_text(page, "Шрифт")
+        await page.wait_for_function(f"() => !{PANEL}.scheduler.pending")
+        sent = len(await calls(page))
+        output = await run_renderer_check(page)
+        assert verdict(output) == "SELFTEST FAIL faces_loaded", output
+        assert "FAIL faces_loaded" in output and "Traceback" not in output and " at " not in output
+        assert "error" in (await page.locator("#notice").get_attribute("class") or "")
+        assert "faces_loaded" in await page.locator("#notice").text_content()
+        assert len(await calls(page)) == sent
+        # The panel keeps working: the font comes back and a normal render succeeds.
+        page.font_missing = False
+        # A re-run that passes takes the old failure message away.
+        assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
+        # The render error that the failed check had covered is on screen again.
+        assert "faces_loaded" not in await page.locator("#notice").text_content()
+        assert "error" in (await page.locator("#notice").get_attribute("class") or "")
+        await page.locator("#refresh").click()
+        await settle(page)
+        assert await page.locator("#raster").is_visible()
+        again = await run_renderer_check(page)
+        assert verdict(again) == "SELFTEST PASS", again
+
+
 async def check_injection(p, browser):
     async with panel(p, browser) as page:
         await fill_text(page, '<img src=x onerror="window.pwned=true">', "title")
@@ -2248,6 +2352,18 @@ CHECKS = [
     ),
     ("a label without ink blocks Print", check_no_ink_blocks, False),
     ("diagnosis never prints", check_diagnose_never_prints, False),
+    ("renderer check passes and leaves the panel unchanged", check_renderer_check_passes, False),
+    (
+        "renderer check without Clipboard API or OffscreenCanvas",
+        check_renderer_check_without_clipboard,
+        False,
+    ),
+    ("renderer check output can be copied", check_renderer_check_copies, False),
+    (
+        "renderer check reports a failing check and the panel keeps working",
+        check_renderer_check_reports_failure,
+        False,
+    ),
     ("untrusted template content is text, not HTML", check_injection, False),
     ("transport wording: native, bridge, local LE, no printer", check_wording, "shoot"),
     ("mobile 390px has no horizontal overflow; screenshots", check_mobile_and_screens, "shoot+tmp"),
