@@ -276,7 +276,7 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
         self.hass.data["tinyprint"]["one"].async_print.assert_not_awaited()
 
     async def test_panel_registration_is_idempotent(self):
-        from custom_components.tinyprint.studio import async_setup_panel
+        from custom_components.tinyprint.studio import PANEL_VERSION, async_setup_panel
 
         self.hass.http = SimpleNamespace(async_register_static_paths=AsyncMock())
         with patch(
@@ -287,6 +287,12 @@ class StudioAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(register.call_args.kwargs["require_admin"])
             self.assertEqual(register.call_args.kwargs["frontend_url_path"], "tinyprint")
         self.hass.http.async_register_static_paths.assert_awaited_once()
+        config = self.hass.http.async_register_static_paths.await_args.args[0][0]
+        self.assertEqual(config.url_path, f"/tinyprint_static/{PANEL_VERSION}")
+        self.assertEqual(
+            register.call_args.kwargs["module_url"],
+            f"/tinyprint_static/{PANEL_VERSION}/tinyprint-panel.js",
+        )
         self.hass.http = None
 
     async def test_loaded_entry_uses_studio_runtime_and_registers_panel(self):

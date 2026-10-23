@@ -1,7 +1,7 @@
 // Pure option rules: grid snapping, font coercion, preset application, font hints.
 export { snapToGrid, APPROX_WIDTH_STEP, APPROX_WEIGHT_STEP } from '../renderer/index.js';
 
-const ENHANCEMENT_KEYS = ['method', 'contrast', 'brightness', 'sharpness'];
+export const ENHANCEMENT_KEYS = ['method', 'contrast', 'brightness', 'sharpness'];
 
 /** Spec "Fonts": non-blocking hint when stroke counters are likely to close (Roboto Flex only). */
 export function closingCounterHint(font, size, width, weight) {

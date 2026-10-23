@@ -219,7 +219,9 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
             await hass.http.async_register_static_paths(
                 [
                     StaticPathConfig(
-                        "/tinyprint_static", str(Path(__file__).parent / "frontend"), False
+                        f"/tinyprint_static/{PANEL_VERSION}",
+                        str(Path(__file__).parent / "frontend"),
+                        False,
                     )
                 ]
             )
@@ -231,7 +233,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
                 webcomponent_name="tinyprint-panel",
                 sidebar_title="TinyPrint",
                 sidebar_icon="mdi:printer",
-                module_url=f"/tinyprint_static/tinyprint-panel.js?v={PANEL_VERSION}",
+                module_url=f"/tinyprint_static/{PANEL_VERSION}/tinyprint-panel.js",
                 require_admin=True,
             )
             state["panel"] = True

@@ -35,14 +35,19 @@ def font_table() -> dict:
 
 
 async def open_page(
-    playwright, browser_name: str, *, font_delay_ms: int = 0, no_offscreen: bool = False
+    playwright,
+    browser_name: str,
+    *,
+    font_delay_ms: int = 0,
+    no_offscreen: bool = False,
+    **page_options,
 ):
     launcher = getattr(playwright, browser_name)
     options = {}
     if browser_name == "chromium" and os.environ.get("CHROMIUM_PATH"):
         options["executable_path"] = os.environ["CHROMIUM_PATH"]
     browser = await launcher.launch(**options)
-    page = await browser.new_page()
+    page = await browser.new_page(**page_options)
     page.requests = []
     page.on("request", lambda request: page.requests.append(request.url))
     if no_offscreen:

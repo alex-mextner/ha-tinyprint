@@ -1,12 +1,13 @@
 # TinyPrint Studio (0.2.1)
 
-The native **TinyPrint** sidebar contains a label editor, exact one-bit preview,
-image preparation and explicit print/cancel/diagnose controls. It is packaged with
+The native **TinyPrint** sidebar contains a label editor with a live one-bit strip
+(rendered in the browser as you type), image preparation and explicit
+print/cancel/diagnose controls. It is packaged with
 the integration: no separate web server, CDN, browser token storage or mobile app.
 
 This feature branch is not proof of physical printer compatibility. Paper output
 and the X6h GATT profile still require verification on a powered, reachable device.
-A successful preview never connects to Bluetooth; `transport_only` never means
+A render never connects to Bluetooth; `transport_only` never means
 that paper output or QR readability has been confirmed.
 
 ## Installation
@@ -113,8 +114,9 @@ response_variable: preview
 
 `tinyprint.print_document` accepts the same `document` plus a required `device_id`.
 An optional `expected_sha256` rejects changed content/font/file before connection.
-The sidebar always sends the preview hash. There is no print on page load, preview,
-file upload or reconnection; there are no automatic retries after raster transmission.
+The sidebar does not use this action: Print sends the displayed 1-bit bitmap through
+`tinyprint.print_bitmap` (`device_id`, `rows`, `bitmap_b64`). There is no print on page
+load, edit, file upload, printer switch or reconnection; there are no automatic retries after raster transmission.
 
 ```yaml
 action: tinyprint.print_document
@@ -204,6 +206,7 @@ python tests/browser_studio.py                          # requires Playwright/Ch
 
 The browser harness loads the real packaged web component and real renderer but
 simulates HA service routing and Bluetooth. Screenshots are labelled accordingly.
-It checks mobile layout, upload, presets, stale previews, explicit single printing,
-no print during diagnosis, hidden image options left out of template previews,
+It checks mobile layout, upload, presets, stale renders, explicit single printing,
+that the sent bytes are the displayed pixels, no print during diagnosis, hidden image
+options left out of template documents,
 injection safety and browser exceptions.
