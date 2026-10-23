@@ -1572,6 +1572,122 @@
   {
    "document": {
     "fields": {
+     "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 84,
+      "kind": "text",
+      "lines": [
+       "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+       "😀😀😀😀😀😀"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 100
+   },
+   "name": "wrap-emoji-run",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 152,
+      "kind": "text",
+      "lines": [
+       "éééééééééééééééééééééééééééé",
+       "éééééééééééééééééééééééééééé",
+       "éééééééééééééééééééééééééééé",
+       "éééééééééééééééé"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 168
+   },
+   "name": "wrap-combining-run",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "Привет 😀é мир 😀😀 ё̆ё̆ Привет 😀é мир 😀😀 ё̆ё̆ Привет 😀é мир 😀😀 ё̆ё̆ Привет 😀é мир 😀😀 ё̆ё̆ Привет 😀é мир 😀😀 ё̆ё̆ Привет 😀é мир 😀😀 ё̆ё̆ "
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 186,
+      "kind": "text",
+      "lines": [
+       "Привет 😀é мир 😀😀 ё̆ё̆ Привет 😀é",
+       "мир 😀😀 ё̆ё̆ Привет 😀é мир 😀😀",
+       "ё̆ё̆ Привет 😀é мир 😀😀 ё̆ё̆",
+       "Привет 😀é мир 😀😀 ё̆ё̆ Привет 😀é",
+       "мир 😀😀 ё̆ё̆ "
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 202
+   },
+   "name": "wrap-mixed-run",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
      "text": "строка один\r\nстрока два\r\n\r\nстрока четыре"
     },
     "kind": "template",
@@ -1605,6 +1721,306 @@
     "rows": 168
    },
    "name": "note-crlf",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1,
+     "font_size": 96
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 90,
+      "descent": 24,
+      "field": "text",
+      "h": 254,
+      "kind": "text",
+      "lines": [
+       "😀😀😀😀😀😀😀😀",
+       "😀😀😀😀"
+      ],
+      "size": 96,
+      "step": 119,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 270
+   },
+   "name": "wrap-emoji-run-96",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "éééééééééééééé"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1,
+     "font_size": 96
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 90,
+      "descent": 24,
+      "field": "text",
+      "h": 254,
+      "kind": "text",
+      "lines": [
+       "ééééééé",
+       "ééééééé"
+      ],
+      "size": 96,
+      "step": 119,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 270
+   },
+   "name": "wrap-combining-run-96",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "я😀éё̆😀 ая😀éё̆😀 а"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1,
+     "font_size": 96
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 90,
+      "descent": 24,
+      "field": "text",
+      "h": 373,
+      "kind": "text",
+      "lines": [
+       "я😀éё̆😀",
+       "ая😀éё̆😀",
+       "а"
+      ],
+      "size": 96,
+      "step": 119,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 389
+   },
+   "name": "wrap-mixed-run-96",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "ж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 50,
+      "kind": "text",
+      "lines": [
+       "ж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 66
+   },
+   "name": "wrap-emoji-shift-1",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "жж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 50,
+      "kind": "text",
+      "lines": [
+       "жж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 66
+   },
+   "name": "wrap-emoji-shift-2",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "жжж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 84,
+      "kind": "text",
+      "lines": [
+       "жжж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+       "😀"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 100
+   },
+   "name": "wrap-emoji-shift-3",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "жжжж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "note"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 84,
+      "kind": "text",
+      "lines": [
+       "жжжж😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+       "😀😀"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     }
+    ],
+    "rows": 100
+   },
+   "name": "wrap-emoji-shift-4",
+   "near_edge": false,
+   "qr": false
+  },
+  {
+   "document": {
+    "fields": {
+     "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\néééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    "kind": "template",
+    "options": {
+     "columns": 1
+    },
+    "template": "checklist"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 23,
+      "descent": 6,
+      "field": "text",
+      "h": 152,
+      "kind": "text",
+      "lines": [
+       "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+       "éééééééééééééééééééééééééé",
+       "éééééééééééééééééééééééééé",
+       "éééééééé"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 16,
+      "w": 340,
+      "x": 34,
+      "y": 8
+     }
+    ],
+    "rows": 168
+   },
+   "name": "wrap-checklist-emoji-run",
    "near_edge": false,
    "qr": false
   },

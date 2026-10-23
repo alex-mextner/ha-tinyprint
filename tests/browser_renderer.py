@@ -357,6 +357,19 @@ async def run_layout(page, body: str, **extra):
 
 CASES = [{**c, "document": normalized(c["document"])} for c in GOLDEN["cases"]]
 
+
+def has_astral(case: dict) -> bool:
+    document = case["document"]
+    text = document.get("fields", {}).get("text") or document.get("text") or ""
+    return any(ord(char) > 0xFFFF for char in text)
+
+
+# Roboto Flex has no emoji: Pillow draws its .notdef box, a browser falls back to a system emoji
+# font of another advance, so the Python line breaks of a WRAPPING astral run cannot be reproduced
+# (platform-dependent). Those cases keep property checks (whole code points, nothing lost) and
+# are left out of the line-for-line comparison; combining-mark cases are compared in full.
+ASTRAL_WRAP_CASES = {c["name"] for c in CASES if c["name"].startswith("wrap-") and has_astral(c)}
+
 GOLDEN_BODY = """
 const out = [];
 for (const c of args.cases) {
@@ -395,7 +408,7 @@ return out;
 
 
 async def check_golden_cases(page):
-    cases = [c for c in CASES if not c["near_edge"]]
+    cases = [c for c in CASES if not c["near_edge"] and c["name"] not in ASTRAL_WRAP_CASES]
     assert len(cases) > 30, len(cases)
     bad = await run_layout(page, GOLDEN_BODY, cases=cases, near_edge=False)
     assert not bad, bad[:8]
@@ -432,15 +445,16 @@ async def check_unusual_text(page):
         const out = {};
         for (const c of args.cases) {
           const p = await plan(c.document);
-          out[c.name] = p.blocks.flatMap((b) => b.lines);
+          const lines = p.blocks.flatMap((b) => b.lines);
+          const lone = /[\\ud800-\\udbff](?![\\udc00-\\udfff])|(?<![\\ud800-\\udbff])[\\udc00-\\udfff]/;
+          out[c.name] = lines.some((line) => lone.test(line)) ? ['LONE SURROGATE'] : lines;
         }
         return out;
         """,
         cases=[c for c in CASES if c["name"] in names],
     )
     for name, lines in result.items():
-        assert lines, name
-        assert not any(0xD800 <= ord(char) <= 0xDFFF for line in lines for char in line), lines
+        assert lines and lines != ["LONE SURROGATE"], (name, lines)
     assert "".join(result["note-emoji"]).count("\U0001f600") == 3, result["note-emoji"]
     assert all(len(line) <= 600 for line in result["note-long-token"])
     assert "".join(result["note-long-token"]) == "x" * 600
@@ -462,6 +476,92 @@ async def check_too_tall(page):
         doc=normalized({"kind": "template", "template": "note", "fields": {"text": "\n" * 3000}}),
     )
     assert result == {"code": "too_tall", "isRenderError": True}, result
+
+
+WRAP_BODY = """
+const lone = /[\\ud800-\\udbff](?![\\udc00-\\udfff])|(?<![\\ud800-\\udbff])[\\udc00-\\udfff]/;
+const combining = /^[\\u0300-\\u036f]/;
+const out = [];
+for (const c of args.cases) {
+  const p = await plan(c.document);
+  const text = c.document.fields?.text ?? c.document.text;
+  const expected = text.replace(/[\\r\\n ]/g, '');
+  const lines = p.blocks.flatMap((b) => b.lines);
+  const bad = (what) => out.push(`${c.name}: ${what}`);
+  if (lines.length < 2 && !args.astral.includes(c.name)) bad('did not wrap');
+  if (lines.some((line) => lone.test(line))) bad('a line holds a lone surrogate');
+  if (lines.some((line) => combining.test(line))) bad('a line starts with a combining mark');
+  if (lines.join('').replace(/ /g, '') !== expected) bad('joined lines differ from the input');
+  const golden = c.expect.blocks.flatMap((b) => b.lines);
+  if (!args.astral.includes(c.name) && JSON.stringify(lines) !== JSON.stringify(golden)) {
+    bad(`lines ${JSON.stringify(lines)} != ${JSON.stringify(golden)}`);
+  }
+}
+return out;
+"""
+
+
+async def check_wrap_boundaries(page):
+    cases = [c for c in CASES if c["name"].startswith("wrap-")]
+    assert len(cases) == 11 and len(ASTRAL_WRAP_CASES) == 9, [c["name"] for c in cases]
+    bad = await run_layout(page, WRAP_BODY, cases=cases, astral=sorted(ASTRAL_WRAP_CASES))
+    assert not bad, bad[:6]
+
+
+def rows_of(lines: int, size: int) -> int | None:
+    """Python's own height of `lines` note lines at `size`, None when Python refuses it."""
+    document = {
+        "kind": "template",
+        "template": "note",
+        "fields": {"text": "\n".join(["строка"] * lines)},
+        "options": {"font_size": size},
+    }
+    try:
+        return STUDIO.layout_blocks(normalized(document))["rows"]
+    except ValueError:
+        return None
+
+
+def row_cap_boundary() -> tuple[int, int]:
+    """(size, lines): a note whose Python plan is exactly 2048 rows, one more line is refused."""
+    for size in range(12, 97):
+        step = sum(FONT_METRICS(size)) + 5
+        lines = (2048 - 32) // step
+        if rows_of(lines, size) == 2048 and rows_of(lines + 1, size) is None:
+            return size, lines
+    raise AssertionError("no font size lands exactly on 2048 rows")
+
+
+def FONT_METRICS(size: int) -> tuple[int, int]:  # noqa: N802 - reads like a table lookup
+    return load("fonts").open_font("roboto_flex", size).getmetrics()
+
+
+async def check_row_cap_boundary(page):
+    size, lines = row_cap_boundary()
+    result = await run_layout(
+        page,
+        """
+        const outcome = async (count) => {
+          const doc = { ...args.doc, fields: { text: Array(count).fill('строка').join('\\n') } };
+          try {
+            return { rows: (await plan(doc)).rows };
+          } catch (error) {
+            return { code: error.code };
+          }
+        };
+        return [await outcome(args.lines), await outcome(args.lines + 1)];
+        """,
+        doc=normalized(
+            {
+                "kind": "template",
+                "template": "note",
+                "fields": {"text": "x"},
+                "options": {"font_size": size},
+            }
+        ),
+        lines=lines,
+    )
+    assert result == [{"rows": 2048}, {"code": "too_tall"}], (size, lines, result)
 
 
 async def check_pixels(page):
@@ -656,6 +756,11 @@ CHECKS = [
         "layout: emoji, tab, combining marks and a 600-char token do not crash",
         check_unusual_text,
     ),
+    (
+        "layout: emoji and combining marks wrap whole at the line boundary",
+        check_wrap_boundaries,
+    ),
+    ("layout: 2048 rows plan and 2049 raises too_tall", check_row_cap_boundary),
     ("layout: more than 2048 rows raises too_tall", check_too_tall),
     ("layout: checkbox and border pixels follow the Python rectangles", check_pixels),
     ("layout: Tiny5 width 200 measures twice width 100", check_tiny5_scale),

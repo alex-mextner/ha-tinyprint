@@ -122,10 +122,31 @@ def _case_documents() -> list[tuple[str, dict, bool]]:
         "note-combining": "e\u0301 a\u0308 Ё\u0306 n\u0303 x\u0323\u0307 слово",
         "note-blank-lines": "первый\n\nвторой\n\n\nтретий",
         "note-long-token": "x" * 600,
+        # Wrap-boundary runs: a UTF-16 slice would split a pair or detach a combining mark.
+        "wrap-emoji-run": "😀" * 40,
+        "wrap-combining-run": "e\u0301" * 100,
+        "wrap-mixed-run": "Привет 😀e\u0301 мир 😀😀 ё\u0306ё\u0306 " * 6,
         "note-crlf": "строка один\r\nстрока два\r\n\r\nстрока четыре",
     }
     for name, text in notes.items():
         cases.append((name, template("note", {"text": text}), False))
+    for name, text in {
+        "wrap-emoji-run-96": "😀" * 12,
+        "wrap-combining-run-96": "e\u0301" * 14,
+        "wrap-mixed-run-96": "я😀e\u0301ё\u0306😀 а" * 2,
+    }.items():
+        cases.append((name, template("note", {"text": text}, font_size=96), False))
+    # Shifting the run by 1-4 letters moves the wrap limit across the middle of an emoji.
+    for shift in range(1, 5):
+        text = "ж" * shift + "😀" * 30
+        cases.append((f"wrap-emoji-shift-{shift}", template("note", {"text": text}), False))
+    cases.append(
+        (
+            "wrap-checklist-emoji-run",
+            template("checklist", {"text": "😀" * 30 + "\n" + "e\u0301" * 60}),
+            False,
+        )
+    )
     long_text = "Один из самых длинных пунктов списка не помещается в одну строку ширины бумаги"
     for align in ("center", "right"):
         fields = {"title": "Заголовок", "text": "Выровненный текст, который займёт несколько строк"}
