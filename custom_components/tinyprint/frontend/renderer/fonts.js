@@ -47,7 +47,7 @@ export class FaceRegistry {
     this.baseUrl = baseUrl;
     this.limit = limit;
     this.buffers = new Map(); // file -> Promise<ArrayBuffer>
-    this.faces = new Map(); // family -> {promise, fontFace}; Map order is LRU order
+    this.faces = new Map(); // family -> {promise, fontFace, settled, fresh}; Map order is LRU order
   }
 
   #buffer(file) {
@@ -72,23 +72,32 @@ export class FaceRegistry {
     return response.arrayBuffer();
   }
 
-  async #load(family, entry, stretch, weight, entryRecord) {
-    const buffer = await this.#buffer(entry.file);
-    const fontFace = new FontFace(family, buffer, { stretch: `${stretch}%`, weight: String(weight) });
+  async #load(family, entry, stretch, weight, record) {
+    const pending = this.#buffer(entry.file);
     try {
-      await fontFace.load();
+      const buffer = await pending;
+      const fontFace = new FontFace(family, buffer, { stretch: `${stretch}%`, weight: String(weight) });
+      try {
+        await fontFace.load();
+      } catch (error) {
+        throw new RenderError('font_load_failed', `font ${entry.file}: ${error}`);
+      }
+      if (fontFace.status !== 'loaded') {
+        throw new RenderError('font_load_failed', `font ${entry.file}: status ${fontFace.status}`);
+      }
+      // Parse before registering: a face that fails here must leave nothing in document.fonts.
+      const face = makeFace(family, buffer);
+      document.fonts.add(fontFace);
+      if (!document.fonts.has(fontFace)) {
+        throw new RenderError('font_load_failed', `font ${entry.file} was not registered`);
+      }
+      record.fontFace = fontFace;
+      return face;
     } catch (error) {
-      throw new RenderError('font_load_failed', `font ${entry.file}: ${error}`);
+      // A corrupt buffer must not stay cached: the next request refetches.
+      if (this.buffers.get(entry.file) === pending) this.buffers.delete(entry.file);
+      throw error;
     }
-    if (fontFace.status !== 'loaded') {
-      throw new RenderError('font_load_failed', `font ${entry.file}: status ${fontFace.status}`);
-    }
-    document.fonts.add(fontFace);
-    if (!document.fonts.has(fontFace)) {
-      throw new RenderError('font_load_failed', `font ${entry.file} was not registered`);
-    }
-    entryRecord.fontFace = fontFace;
-    return makeFace(family, buffer);
   }
 
   /** `key` is the font key of printer_info.fonts; `entry` its table row. */
@@ -103,12 +112,22 @@ export class FaceRegistry {
       this.faces.set(family, known);
       return known.promise.then(withScale(scaled, width));
     }
-    const record = { promise: null, fontFace: null, settled: false };
+    const record = { promise: null, fontFace: null, settled: false, fresh: false };
     record.promise = this.#load(family, entry, stretch, usedWeight, record);
     this.faces.set(family, record);
     record.promise.then(
       () => {
         record.settled = true;
+        // Settling counts as use: move to the most-recent end (Map order is LRU order).
+        if (this.faces.get(family) === record) {
+          this.faces.delete(family);
+          this.faces.set(family, record);
+        }
+        record.fresh = true;
+        setTimeout(() => {
+          record.fresh = false;
+          this.#evict();
+        }, 0);
         this.#evict();
       },
       () => {
@@ -118,12 +137,13 @@ export class FaceRegistry {
     return record.promise.then(withScale(scaled, width));
   }
 
-  // Only settled records are evictable: dropping a pending one would hand its caller a face
-  // whose FontFace is deleted right after loading.
+  // Only settled records are evictable, least recently used first. A record that settled in
+  // the current task is "fresh": its caller is resuming this very turn, so it is skipped and
+  // gets evicted by the later pass (burst of more than `limit` loads) once the task ends.
   #evict() {
     for (const [family, record] of this.faces) {
       if (this.faces.size <= this.limit) return;
-      if (!record.settled) continue;
+      if (!record.settled || record.fresh) continue;
       this.faces.delete(family);
       if (record.fontFace) document.fonts.delete(record.fontFace);
     }

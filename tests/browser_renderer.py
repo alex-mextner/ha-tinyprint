@@ -6,6 +6,7 @@ Run: python tests/browser_renderer.py
 import asyncio
 import json
 import random
+import struct
 import sys
 from pathlib import Path
 
@@ -152,16 +153,21 @@ async def check_lru(page):
           const { FaceRegistry } = await import(url);
           const registry = new FaceRegistry(new URL(base));
           const tp = () => [...document.fonts].filter((f) => f.family.replaceAll('"', '').startsWith('tp-')).map((f) => f.family.replaceAll('"', ''));
+          // Faces settled in the current task are protected from eviction until the task ends.
+          const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
           const first = await registry.face('roboto_flex', fonts.roboto_flex, 20, 400);
           for (let w = 30; w <= 90; w += 10) await registry.face('roboto_flex', fonts.roboto_flex, w, 400);
           const eight = tp();
           await registry.face('roboto_flex', fonts.roboto_flex, 100, 400);
+          await settle();
           const nine = tp();
           const again = await registry.face('roboto_flex', fonts.roboto_flex, 20, 400);
+          await settle();
           const afterAgain = tp();
           registry.dispose();
           const burst = new FaceRegistry(new URL(base));
           const faces = await Promise.all([20, 30, 40, 50, 60, 70, 80, 90, 100].map((w) => burst.face('roboto_flex', fonts.roboto_flex, w, 400)));
+          await settle();
           const burstCount = tp().length;
           burst.dispose();
           return { first: first.family, eight, nine, again: again.family, afterAgain, left: tp(), burstCount, burstFaces: faces.length };
@@ -199,6 +205,107 @@ async def check_missing(page):
     assert result == {"code": "font_missing", "left": 0}, result
 
 
+def truncated_hhea_woff(ttf: bytes) -> bytes:
+    """A WOFF the browser loads but whose sfnt table directory the registry cannot read."""
+    count = struct.unpack(">H", ttf[4:6])[0]
+    records = [struct.unpack(">4sIII", ttf[12 + 16 * i : 28 + 16 * i]) for i in range(count)]
+    tables = [
+        (tag, checksum, ttf[offset : offset + length]) for tag, checksum, offset, length in records
+    ]
+    sfnt_size = 12 + 16 * count + sum((len(data) + 3) & ~3 for _, _, data in tables)
+    offset = 44 + 20 * count
+    directory, body = b"", b""
+    for tag, checksum, data in tables:
+        directory += struct.pack(">4sIIII", tag, offset + len(body), len(data), len(data), checksum)
+        body += data + b"\0" * (-len(data) % 4)
+    header = struct.pack(
+        ">4sIIHHIHHIIIII",
+        b"wOFF",
+        0x00010000,
+        44 + 20 * count + len(body),
+        count,
+        0,
+        sfnt_size,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    return header + directory + body
+
+
+async def check_corrupt_font(page):
+    good = (
+        ROOT
+        / "custom_components"
+        / "tinyprint"
+        / "frontend"
+        / "fonts"
+        / FONTS["roboto_flex"]["file"]
+    ).read_bytes()
+    served = {"bad": True}
+
+    async def sometimes_corrupt(route):
+        if served["bad"]:
+            await route.fulfill(status=200, content_type="font/ttf", body=truncated_hhea_woff(good))
+        else:
+            await route.fallback()
+
+    file = FONTS["roboto_flex"]["file"]
+    await page.route(f"**/fonts/{file}", sometimes_corrupt)
+    probe = """async ([url, base, fonts]) => {
+      const { FaceRegistry } = await import(url);
+      window.registry ??= new FaceRegistry(new URL(base));
+      let code = null;
+      try { await window.registry.face('roboto_flex', fonts.roboto_flex, 100, 400); } catch (e) { code = e.code; }
+      const left = [...document.fonts].filter((f) => f.family.replaceAll('"', '').startsWith('tp-')).length;
+      return { code, left };
+    }"""
+    args = [FONTS_JS, STATIC, FONTS]
+    first = await page.evaluate(probe, args)
+    assert first == {"code": "font_load_failed", "left": 0}, first
+    served["bad"] = False
+    second = await page.evaluate(probe, args)
+    assert second == {"code": None, "left": 1}, second
+    fetches = [u for u in page.requests if u.endswith(f"fonts/{file}")]
+    assert len(fetches) == 2, fetches
+
+
+async def check_concurrent_settle_order(page):
+    tiny_file = FONTS["tiny5"]["file"]
+
+    async def slow(route):
+        await asyncio.sleep(1.0)
+        await route.fallback()
+
+    await page.route(f"**/fonts/{tiny_file}", slow)
+    result = await page.evaluate(
+        """async ([url, base, fonts]) => {
+          const { FaceRegistry } = await import(url);
+          const registry = new FaceRegistry(new URL(base));
+          const registered = (face) => [...document.fonts].some((f) => f.family.replaceAll('"', '') === face.family && f.status === 'loaded');
+          const order = [];
+          const requests = [registry.face('tiny5', fonts.tiny5, 100, 400)];
+          for (const w of [20, 30, 40, 50, 60, 70, 80, 90]) requests.push(registry.face('roboto_flex', fonts.roboto_flex, w, 400));
+          const checked = await Promise.all(requests.map(async (request, i) => {
+            const face = await request;
+            order.push(i);
+            return registered(face);
+          }));
+          const count = [...document.fonts].filter((f) => f.family.replaceAll('"', '').startsWith('tp-')).length;
+          registry.dispose();
+          return { checked, count, lastSettled: order[order.length - 1] };
+        }""",
+        [FONTS_JS, STATIC, FONTS],
+    )
+    assert result["lastSettled"] == 0, result
+    assert all(result["checked"]), result
+    assert result["count"] == 8, result
+
+
 CHECKS = [
     ("pack: bit order and alpha threshold", check_pack_bits),
     ("pack: bytesToBase64 round-trips 98,304 bytes without a RangeError", check_base64),
@@ -207,6 +314,11 @@ CHECKS = [
     ("fonts: hhea metrics match the Pillow golden and Tiny5 scales", check_metrics_and_scale),
     ("fonts: LRU keeps 8 faces and removes evicted ones from document.fonts", check_lru),
     ("fonts: missing file fails loudly", check_missing),
+    ("fonts: unreadable font leaves no face and is refetched", check_corrupt_font),
+    (
+        "fonts: a face that settles last under concurrency stays registered",
+        check_concurrent_settle_order,
+    ),
 ]
 
 
