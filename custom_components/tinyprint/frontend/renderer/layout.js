@@ -2,6 +2,7 @@
 // Measuring and drawing use the same context font (`face.css(size)`) and `ctx.measureText`; the
 // caller owns the context recipe (OffscreenCanvas, textRendering = 'geometricPrecision').
 import { RenderError } from './errors.js';
+import { drawQr, qrScale } from './qr.js';
 
 const WIDTH = 384;
 const MAX_ROWS = 2048;
@@ -287,8 +288,7 @@ function qrPart(field, text, options, qrModules) {
   const ecc = options.qr_correction;
   if (!QR_LEVELS.has(ecc)) throw new RenderError('bad_document', `unknown QR level ${ecc}`);
   const modules = qrModules(text, ecc);
-  const scale = Math.floor(options.qr_size / (modules + 8));
-  if (scale < 3) throw new RenderError('qr_modules_too_small');
+  const scale = qrScale(modules, options.qr_size);
   const size = (modules + 8) * scale;
   return {
     field,
@@ -453,43 +453,50 @@ function frame(ctx, x0, y0, x1, y1) {
   ctx.fillRect(x1 - 1, y0, 2, h);
 }
 
-/** Draws text, checkboxes and the border; the QR layer is added by qr.js on top of the plan. */
+/** Draws text, checkboxes, QR codes and the border. */
 export function drawPlan(ctx, plan) {
   ctx.save();
   ctx.fillStyle = '#000';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
-  for (const block of plan.blocks) {
-    if (block.kind !== 'text') continue;
-    const { face } = block;
-    ctx.font = face.css(block.size);
-    const groups = block.columns
-      ? block.columns.map((column) => ({
-          ...column,
-          box: column.x,
-          startX: (width) => columnX(block, column, width),
-        }))
-      : [{ ...block, box: CHECKBOX.x0, startX: (width) => drawX(block, width) }];
-    for (const group of groups) {
-      group.lines.forEach((line, i) => {
-        const y = block.text_y + i * block.step;
-        if (group.checks[i]) {
-          const x0 = group.box;
-          frame(ctx, x0, y + CHECKBOX.top, x0 + CHECKBOX.x1 - CHECKBOX.x0, y + CHECKBOX.bottom);
-        }
-        if (line === '') return;
-        const x = group.startX(group.widths[i]);
-        if (face.scaleX === 1) {
-          ctx.fillText(line, x, y + block.ascent);
-        } else {
-          ctx.save();
-          ctx.scale(face.scaleX, 1);
-          ctx.fillText(line, x / face.scaleX, y + block.ascent);
-          ctx.restore();
-        }
-      });
+  try {
+    for (const block of plan.blocks) {
+      if (block.kind === 'qr') {
+        drawQr(ctx, block);
+        continue;
+      }
+      if (block.kind !== 'text') continue;
+      const { face } = block;
+      ctx.font = face.css(block.size);
+      const groups = block.columns
+        ? block.columns.map((column) => ({
+            ...column,
+            box: column.x,
+            startX: (width) => columnX(block, column, width),
+          }))
+        : [{ ...block, box: CHECKBOX.x0, startX: (width) => drawX(block, width) }];
+      for (const group of groups) {
+        group.lines.forEach((line, i) => {
+          const y = block.text_y + i * block.step;
+          if (group.checks[i]) {
+            const x0 = group.box;
+            frame(ctx, x0, y + CHECKBOX.top, x0 + CHECKBOX.x1 - CHECKBOX.x0, y + CHECKBOX.bottom);
+          }
+          if (line === '') return;
+          const x = group.startX(group.widths[i]);
+          if (face.scaleX === 1) {
+            ctx.fillText(line, x, y + block.ascent);
+          } else {
+            ctx.save();
+            ctx.scale(face.scaleX, 1);
+            ctx.fillText(line, x / face.scaleX, y + block.ascent);
+            ctx.restore();
+          }
+        });
+      }
     }
+    if (plan.border) frame(ctx, 2, 2, WIDTH - 3, plan.rows - 3);
+  } finally {
+    ctx.restore();
   }
-  if (plan.border) frame(ctx, 2, 2, WIDTH - 3, plan.rows - 3);
-  ctx.restore();
 }

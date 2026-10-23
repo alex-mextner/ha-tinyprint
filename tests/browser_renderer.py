@@ -11,6 +11,7 @@ import struct
 import sys
 from pathlib import Path
 
+import qrcode
 from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -23,6 +24,8 @@ METRICS = GOLDEN["metrics"]
 PACK = f"{STATIC}renderer/pack.js"
 FONTS_JS = f"{STATIC}renderer/fonts.js"
 LAYOUT_JS = f"{STATIC}renderer/layout.js"
+QR_JS = f"{STATIC}renderer/qr.js"
+VENDOR_QR_JS = f"{STATIC}vendor/qrcodegen.js"
 STUDIO = load("studio_render")
 
 
@@ -1330,6 +1333,311 @@ async def check_columns_row_cap(page):
     assert result["single"] == {"code": "too_tall"}, result
 
 
+QR_LEVELS = {
+    "M": qrcode.constants.ERROR_CORRECT_M,
+    "Q": qrcode.constants.ERROR_CORRECT_Q,
+    "H": qrcode.constants.ERROR_CORRECT_H,
+}
+# Page glue shared by the QR checks: the real encoder is the module-count callback of planLabel.
+QR_PRELUDE = """
+const qr = await import(args.qr);
+const planQr = async (doc) => layout.planLabel(doc, await faceOf(doc.options), ctx, args.templates, qr.qrModules);
+"""
+
+
+def qr_doc(text: str, size: int = 320, ecc: str = "M") -> dict:
+    return normalized(
+        {"kind": "qr", "text": text, "options": {"qr_size": size, "qr_correction": ecc}}
+    )
+
+
+async def run_qr(page, body: str, **extra):
+    return await run_layout(page, QR_PRELUDE + body, qr=QR_JS, vendor=VENDOR_QR_JS, **extra)
+
+
+async def check_qr_golden(page):
+    cases = [c for c in CASES if c["qr"]]
+    assert len(cases) >= 12, len(cases)
+    bad = await run_qr(
+        page,
+        """
+        const out = [];
+        for (const c of args.cases) {
+          const p = await planQr(c.document);
+          const blocks = p.blocks.filter((b) => b.kind === 'qr');
+          const want = c.expect.blocks.filter((b) => b.kind === 'qr');
+          if (p.rows !== c.expect.rows) out.push(`${c.name}: rows ${p.rows} != ${c.expect.rows}`);
+          if (blocks.length !== want.length) { out.push(`${c.name}: qr blocks`); continue; }
+          blocks.forEach((b, i) => {
+            const e = want[i];
+            if (b.modules !== e.modules) out.push(`${c.name}: modules ${b.modules} != ${e.modules}`);
+            for (const k of ['x', 'y', 'w', 'h', 'text_y']) {
+              if (b[k] !== e[k]) out.push(`${c.name}: ${k} ${b[k]} != ${e[k]}`);
+            }
+            const layer = qr.qrLayer(b.data, b.ecc, c.document.options.qr_size);
+            if (layer.rows !== b.h || layer.modules !== b.modules) out.push(`${c.name}: layer ${layer.rows}/${layer.modules}`);
+          });
+        }
+        return out;
+        """,
+        cases=cases,
+    )
+    assert not bad, bad[:8]
+
+
+# Strings of the spike. Python `qrcode` splits mixed text into numeric/alphanumeric/byte segments,
+# Nayuki's makeSegments picks one segment for the whole string, so these two pack different bit
+# streams and cannot match module for module. Python's smaller version may not even hold the single
+# segment, so the forced encode can raise "Data too long"; the code stays valid and decodable.
+QR_MODULE_STRINGS = [
+    "HELLO WORLD",
+    "https://example.com/a?b=c&d=e",
+    "Привет, мир!",
+    "WIFI:T:WPA;S:HomeNet;P:s3cret-pass;;",
+    "1234567890123456",
+    "https://example.com/tinyprint?id=12345&x=Привет",
+    "A" * 120,
+    "BEGIN:VCARD\nVERSION:3.0\nFN:Иван Петров\nTEL:+79001234567\nEND:VCARD",
+    "http://homeassistant.local:8123/api/webhook/abcdefghijklmnop",
+    "ТЕСТ 123",
+    "ABC123abc",
+    "01234567890123456789012345678901234567890123456789",
+    "ORDER 12345678901234567890123456789012345678901234567890 THANKS FOR SHOPPING",
+    "ID:12345678901234567890123456789012345678901234567890 abc",
+]
+QR_SEGMENT_SPLIT = {s for s in QR_MODULE_STRINGS if s.startswith(("ORDER ", "ID:"))}
+
+
+def python_symbol(text: str, ecc: str, version=None, mask=None) -> qrcode.QRCode:
+    code = qrcode.QRCode(
+        version=version,
+        error_correction=QR_LEVELS[ecc],
+        box_size=1,
+        border=0,
+        mask_pattern=mask,
+    )
+    code.add_data(text)
+    code.make(fit=version is None)
+    return code
+
+
+async def check_qr_modules_equal_python(page):
+    cases = []
+    for text in QR_MODULE_STRINGS:
+        for ecc in QR_LEVELS:
+            auto = python_symbol(text, ecc)
+            # qrcode does not report the mask it chose: find the forced mask that reproduces it.
+            mask = next(
+                m
+                for m in range(8)
+                if python_symbol(text, ecc, auto.version, m).modules == auto.modules
+            )
+            cases.append(
+                {
+                    "text": text,
+                    "ecc": ecc,
+                    "version": auto.version,
+                    "mask": mask,
+                    "segments": len(auto.data_list),
+                    "rows": [[int(cell) for cell in row] for row in auto.modules],
+                }
+            )
+    # The split strings really are multi-segment in Python, the others are not.
+    for case in cases:
+        assert (case["segments"] > 1) == (case["text"] in QR_SEGMENT_SPLIT), case["text"]
+    result = await run_qr(
+        page,
+        """
+        const { default: qrcodegen } = await import(args.vendor);
+        const { QrCode, QrSegment } = qrcodegen;
+        const levels = { M: QrCode.Ecc.MEDIUM, Q: QrCode.Ecc.QUARTILE, H: QrCode.Ecc.HIGH };
+        return args.cases.map((c) => {
+          let code;
+          try {
+            code = QrCode.encodeSegments(
+              QrSegment.makeSegments(c.text), levels[c.ecc], c.version, c.version, c.mask, false);
+          } catch (e) {
+            return { error: e.message };
+          }
+          const rows = [];
+          for (let y = 0; y < code.size; y += 1) {
+            rows.push(Array.from({ length: code.size }, (_, x) => (code.getModule(x, y) ? 1 : 0)));
+          }
+          return { same: JSON.stringify(rows) === JSON.stringify(c.rows), version: code.version };
+        });
+        """,
+        cases=cases,
+    )
+    for case, got in zip(cases, result, strict=True):
+        if case["text"] in QR_SEGMENT_SPLIT:
+            continue
+        assert "error" not in got, (case["text"], got)
+        assert got["same"], (case["text"], case["ecc"], case["version"], case["mask"])
+    compared = sum(1 for case in cases if case["text"] not in QR_SEGMENT_SPLIT)
+    assert len(QR_SEGMENT_SPLIT) == 2 and compared == 12 * len(QR_LEVELS)
+
+
+async def check_qr_cache(page):
+    result = await run_qr(
+        page,
+        """
+        const a = qr.qrLayer('https://example.com/a', 'M', 320);
+        const same = qr.qrLayer('https://example.com/a', 'M', 320);
+        const text = qr.qrLayer('https://example.com/b', 'M', 320);
+        const ecc = qr.qrLayer('https://example.com/a', 'Q', 320);
+        const size = qr.qrLayer('https://example.com/a', 'M', 300);
+        return { same: a === same, text: a !== text, ecc: a !== ecc, size: a !== size };
+        """,
+    )
+    assert result == {"same": True, "text": True, "ecc": True, "size": True}, result
+
+
+async def check_qr_decodes(page):
+    import cv2  # noqa: PLC0415 - only this check needs OpenCV
+    import numpy as np  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    texts = [
+        "https://example.com/spool/42",
+        "Катушка №42 — PETG",
+        "".join(f"{n:03d}-" for n in range(30))[:120],
+    ]
+    docs = [qr_doc(text, 320, ecc) for text in texts for ecc in QR_LEVELS]
+    result = await run_qr(
+        page,
+        """
+        const pack = await import(args.pack);
+        return Promise.all(args.docs.map(async (doc) => {
+          const plan = await planQr(doc);
+          ctx.clearRect(0, 0, 384, 2048);
+          layout.drawPlan(ctx, plan);
+          const { data } = ctx.getImageData(0, 0, 384, plan.rows);
+          return { rows: plan.rows, bytes: Array.from(pack.packAlpha(data, 384, plan.rows)) };
+        }));
+        """,
+        docs=docs,
+        pack=PACK,
+    )
+    # The classic detector misses some valid symbols that differ only in white margin (qrcode's own
+    # version-7 Q image fails at one padding and decodes at the next), so the ArUco-based detector
+    # of the same OpenCV module is the second opinion; both read the packed bytes, not the canvas.
+    detectors = [cv2.QRCodeDetector(), cv2.QRCodeDetectorAruco()]
+    for doc, shot in zip(docs, result, strict=True):
+        bits = np.unpackbits(
+            np.array(shot["bytes"], dtype=np.uint8).reshape(shot["rows"], 48), axis=1
+        )
+        image = np.array(Image.fromarray(np.where(bits == 1, 0, 255).astype(np.uint8)))
+        decoded = next((text for d in detectors if (text := d.detectAndDecode(image)[0])), "")
+        assert decoded == doc["text"], (doc["text"][:20], doc["options"]["qr_correction"], decoded)
+
+
+async def check_qr_scaling(page):
+    result = await run_qr(
+        page,
+        """
+        const pack = await import(args.pack);
+        const out = [];
+        for (const [text, size, ecc] of args.cases) {
+          const layer = qr.qrLayer(text, ecc, size);
+          const scale = layer.rows / (layer.modules + 8);
+          const left = Math.floor((384 - layer.rows) / 2);
+          let margin = 0;
+          const at = (x, y) => layer.ink[y * 384 + x];
+          for (let i = 0; i < layer.rows; i += 1) {
+            for (let j = 0; j < 4 * scale; j += 1) {
+              margin += at(left + j, i) + at(left + layer.rows - 1 - j, i)
+                + at(left + i, j) + at(left + i, layer.rows - 1 - j);
+            }
+          }
+          let outside = 0;
+          for (let y = 0; y < layer.rows; y += 1) {
+            for (let x = 0; x < 384; x += 1) {
+              if ((x < left || x >= left + layer.rows) && at(x, y)) outside += 1;
+            }
+          }
+          const plan = await planQr({ ...args.doc, text, options: { ...args.doc.options, qr_size: size, qr_correction: ecc } });
+          ctx.clearRect(0, 0, 384, 2048);
+          layout.drawPlan(ctx, plan);
+          const { data } = ctx.getImageData(0, plan.blocks[0].y, 384, layer.rows);
+          const drawn = pack.packAlpha(data, 384, layer.rows);
+          const expected = pack.packInk(layer.ink, layer.rows);
+          out.push({
+            scale, integer: Number.isInteger(scale), rows: layer.rows, modules: layer.modules,
+            width: layer.width, margin, outside, drawnEqual: drawn.every((v, i) => v === expected[i]),
+          });
+        }
+        return out;
+        """,
+        cases=[["https://example.com/spool/42", 320, "M"], ["x" * 120, 360, "H"], ["a", 96, "Q"]],
+        doc=qr_doc("x"),
+        pack=PACK,
+    )
+    for got in result:
+        assert got["integer"] and got["scale"] >= 3, got
+        assert got["rows"] == (got["modules"] + 8) * got["scale"] and got["width"] == 384, got
+        assert got["margin"] == 0 and got["outside"] == 0 and got["drawnEqual"], got
+
+
+async def check_qr_too_long(page):
+    result = await run_qr(
+        page,
+        """
+        const caught = [];
+        for (const run of [
+          () => qr.qrLayer(args.text, 'H', 360),
+          () => qr.qrModules(args.text, 'H'),
+          () => layout.planLabel(args.doc, null, ctx, args.templates, qr.qrModules),
+        ]) {
+          try { run(); caught.push('no error'); } catch (e) { caught.push([e.name, e.code]); }
+        }
+        const long = qr.qrModules('я'.repeat(500), 'H');
+        return { caught, long };
+        """,
+        text="x" * 3000,
+        doc=qr_doc("x" * 3000, 360, "H"),
+    )
+    assert result["caught"] == [["RenderError", "qr_too_long"]] * 3, result
+    assert result["long"] > 100, result
+
+
+async def check_qr_too_small(page):
+    result = await run_qr(
+        page,
+        """
+        const code = (run) => { try { run(); return null; } catch (e) { return e.code; } };
+        return [
+          code(() => qr.qrLayer('x'.repeat(500), 'M', 96)),
+          code(() => layout.planLabel(args.big, null, ctx, args.templates, qr.qrModules)),
+          code(() => qr.qrLayer('   ', 'M', 320)),
+          code(() => qr.qrLayer('', 'M', 320)),
+          code(() => qr.qrModules('\\n\\t ', 'M')),
+          code(() => qr.qrModules('\\ud83d', 'M')),
+          code(() => qr.qrModules('ab\\udc00', 'M')),
+          code(() => qr.qrModules('a', 'constructor')),
+          code(() => qr.qrLayer('a', 'M', 1000)),
+          code(() => qr.qrLayer('a', 'M', undefined)),
+          code(() => layout.planLabel(args.huge, null, ctx, args.templates, qr.qrModules)),
+        ];
+        """,
+        big=qr_doc("x" * 500, 96, "M"),
+        # Studio-only size: Python's normalize_options would reject it, the browser must not draw it.
+        huge={**qr_doc("a"), "options": {**qr_doc("a")["options"], "qr_size": 1000}},
+    )
+    assert result == [
+        "qr_modules_too_small",
+        "qr_modules_too_small",
+        "blank_qr",
+        "blank_qr",
+        "blank_qr",
+        "bad_document",
+        "bad_document",
+        "bad_document",
+        "bad_document",
+        "qr_modules_too_small",
+        "bad_document",
+    ], result
+
+
 CHECKS = [
     ("pack: bit order and alpha threshold", check_pack_bits),
     ("pack: bytesToBase64 round-trips 98,304 bytes without a RangeError", check_base64),
@@ -1394,6 +1702,16 @@ CHECKS = [
     ("columns: a blank main text slot sits in the first column", check_columns_blank_slot),
     ("columns: only the integers 1, 2 and 3 are accepted", check_columns_invalid_count),
     ("columns: the row cap applies to the tallest column", check_columns_row_cap),
+    ("qr: golden QR cases", check_qr_golden),
+    (
+        "qr: modules equal Python qrcode when version and mask are forced",
+        check_qr_modules_equal_python,
+    ),
+    ("qr: unchanged data is not re-encoded", check_qr_cache),
+    ("qr: decodes with OpenCV", check_qr_decodes),
+    ("qr: integer module scaling and quiet zone", check_qr_scaling),
+    ("qr: data beyond version-40 capacity raises qr_too_long", check_qr_too_long),
+    ("qr: too small modules raise", check_qr_too_small),
 ]
 
 
