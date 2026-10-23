@@ -1,0 +1,35 @@
+{
+ "env": {
+  "freetype2": "2.14.3",
+  "fribidi": "1.0.16",
+  "harfbuzz": "14.2.1",
+  "pillow": "12.3.0",
+  "raqm": true
+ },
+ "hashes": {
+  "checklist|roboto_flex|center": "30e17b691ea1f94acbb51b577f84eb6b09dbd26eb3922a3a20aa79d268719687",
+  "checklist|roboto_flex|left": "30e17b691ea1f94acbb51b577f84eb6b09dbd26eb3922a3a20aa79d268719687",
+  "checklist|tiny5|center": "2d6315fe8310a318ea168d5b60a6beba1068ec7a3925815e83a6283fa60b7a55",
+  "checklist|tiny5|left": "2d6315fe8310a318ea168d5b60a6beba1068ec7a3925815e83a6283fa60b7a55",
+  "heading|roboto_flex|center": "7549f002fd08aee77751922329fca655e1a42548ec3042e9332dc7e78e8a690f",
+  "heading|roboto_flex|left": "d7fe41246f2aa9319a6127fa24cd708278e94a9d7c14295b735c4866ece693d6",
+  "heading|tiny5|center": "25a32b7fdad042933bfe7bbf0eaf5cc71b14e56a52ebe59ff4313ffc1d79e4f9",
+  "heading|tiny5|left": "caae7a6a50d0ba64bac2016748317f478f7f956bc7cbc1e64c559e17d581316c",
+  "note|roboto_flex|center": "d46fde923cf683241412c67607a556d109f6b2151fa3b76a898bb258c41a6128",
+  "note|roboto_flex|left": "1045288445fc2443cbd36969df23cb35228dca7fbb4c08153b1a8e22399e7715",
+  "note|tiny5|center": "e63917f6b5e9877b86a39d402caab8b239ccacc74c5b3fa8f6b7e4ceb435e871",
+  "note|tiny5|left": "23c6a42df000d1f39c217f09ca63b3d997ab0ab0cbb125759d7511a8cf31af2f",
+  "qr_label|roboto_flex|center": "5c04d820259b478b86d2c1b693a7ca37f405c5f433ae8a8dc04684638b86a6fd",
+  "qr_label|roboto_flex|left": "5c04d820259b478b86d2c1b693a7ca37f405c5f433ae8a8dc04684638b86a6fd",
+  "qr_label|tiny5|center": "d0f9a96f541233efa3b5bf1b94f162b1cacc42bfe011fa479aed24fcb3aa3bd8",
+  "qr_label|tiny5|left": "d0f9a96f541233efa3b5bf1b94f162b1cacc42bfe011fa479aed24fcb3aa3bd8",
+  "spool_label|roboto_flex|center": "bec0b6e3964b7f18b7455a763adc20b99f18e5e8db52f6968632f5bf84869047",
+  "spool_label|roboto_flex|left": "823af24fac4b105e541e35483c24499c1610029ad7cd20f2845e6c6c18d3684c",
+  "spool_label|tiny5|center": "bb190c06c79f4ac2058e68215cd8eed9404e2d1ba555dec2242e8155e7639865",
+  "spool_label|tiny5|left": "35978b6e6107b868b5b5a1a036cdaef078a21f18eb798cdec58b9894b1ace34a",
+  "storage_label|roboto_flex|center": "ce4075a7a237d492fa05f7c9115f2bcc9cd926cafaa4199aa3d0b85f3e650c3b",
+  "storage_label|roboto_flex|left": "8066d52b44502a3a01fa564e576a73985ffb972b5bd751c4798340e2b0f16327",
+  "storage_label|tiny5|center": "e49cbf3b1694e841af6b755eba7a07099034ea554bec4d4504b320675f0a7717",
+  "storage_label|tiny5|left": "bdc04781c8ae089fca96cac9743b1545cc01912d31a620c8bbf3ca8a0ed0f517"
+ }
+}

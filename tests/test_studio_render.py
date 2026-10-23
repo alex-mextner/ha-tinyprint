@@ -311,17 +311,118 @@ def test_tiny5_pillow_limits():
     assert render(font="tiny5", font_width=100).width == 384
 
 
-def test_derived_sizes_follow_the_font(monkeypatch):
-    sizes = []
-    original = r._text_block
-
-    def spy(text, size, *args, **kwargs):
-        sizes.append(size)
-        return original(text, size, *args, **kwargs)
-
-    monkeypatch.setattr(r, "_text_block", spy)
+def test_derived_sizes_follow_the_font():
     fields = {"title": "T", "text": "x", "footer": "f"}
     options = {"font": "tiny5", "font_size": 16}
-    r.render_document(document(template="note", fields=fields, options=options))
+    plan = r.layout_blocks(document(template="note", fields=fields, options=options))
     # title (16 + 6 snapped to the 8 grid), body, footer (16 - 4 snapped)
-    assert sizes == [24, 16, 16]
+    assert [b["size"] for b in plan["blocks"]] == [24, 16, 16]
+
+
+ALL_TEMPLATES = ["note", "heading", "checklist", "qr_label", "storage_label", "spool_label"]
+
+
+def example(name, **options):
+    return document(template=name, fields=dict(r.TEMPLATES[name]["example"]), options=options)
+
+
+@pytest.mark.parametrize("name", ALL_TEMPLATES)
+def test_layout_blocks_describe_the_rendered_label(name):
+    doc = example(name)
+    plan = r.layout_blocks(doc)
+    blocks = plan["blocks"]
+    assert plan["rows"] == r.render_document(doc).height
+    assert blocks[0]["y"] == 8
+    for before, after in zip(blocks, blocks[1:]):
+        assert after["y"] == before["y"] + before["h"]
+    assert sum(b["h"] for b in blocks) + 16 == plan["rows"]
+    for block in blocks:
+        if block["kind"] == "text":
+            assert block["text_y"] == block["y"] + 8
+            assert block["h"] == len(block["lines"]) * block["step"] + 16
+            assert block["step"] == block["ascent"] + block["descent"] + 5
+            assert block["w"] == 384 - block["x"] - 10
+        else:
+            assert block["lines"] == [] and block["x"] == (384 - block["w"]) // 2
+
+
+@pytest.mark.parametrize("name", ALL_TEMPLATES)
+def test_every_ink_row_lies_inside_a_block_band_or_the_border(name):
+    for border in (False, True):
+        doc = example(name, border=border)
+        plan = r.layout_blocks(doc)
+        image = r.render_document(doc).convert("L")
+        low, high = (0, plan["rows"]) if border else (8, plan["rows"] - 8)
+        for y in range(plan["rows"]):
+            ink = image.crop((0, y, 384, y + 1)).getextrema()[0] == 0
+            if ink:
+                assert low <= y < high, (name, border, y)
+
+
+def test_title_is_never_smaller_than_body_text_at_size_96():
+    for name in ("note", "heading"):
+        plan = r.layout_blocks(example(name, font_size=96))
+        assert plan["blocks"][0]["field"] == "title" and plan["blocks"][0]["size"] >= 96
+    sizes = {"note": 30, "heading": 38}
+    for name, title in sizes.items():
+        plan = r.layout_blocks(example(name, font_size=24))
+        assert plan["blocks"][0]["size"] == title
+    plan = r.layout_blocks(document(template="note", fields={"text": "x", "footer": "f"}))
+    assert plan["blocks"][-1]["field"] == "footer" and plan["blocks"][-1]["size"] == 20
+
+
+def test_layout_blocks_for_text_and_qr_documents():
+    plan = r.layout_blocks({"kind": "text", "text": "one\ntwo", "options": {"font_size": 24}})
+    assert [b["field"] for b in plan["blocks"]] == ["text"]
+    assert plan["blocks"][0]["lines"] == ["one", "two"]
+    doc = {"kind": "qr", "text": "https://example.com"}
+    plan = r.layout_blocks(doc)
+    (block,) = plan["blocks"]
+    assert block["kind"] == "qr" and block["field"] == "qr" and block["y"] == 8
+    assert plan["rows"] == block["h"] + 16 == r.render_document(doc).height
+
+
+def test_layout_blocks_rejects_image_documents():
+    with pytest.raises(ValueError, match="template, text and qr"):
+        r.layout_blocks({"kind": "image", "path": "/x.png"})
+
+
+def test_spool_rows_are_one_band_with_value_anchors():
+    plan = r.layout_blocks(example("spool_label"))
+    rows = [b for b in plan["blocks"] if b["field"] == "spool_rows"]
+    assert len(rows) == 1
+    block = rows[0]
+    assert [a["field"] for a in block["anchors"]] == ["material", "color", "weight", "nozzle"]
+    assert block["lines"][0].startswith("Материал: ")
+    for index, anchor in enumerate(block["anchors"]):
+        assert anchor["text_y"] == block["text_y"] + index * block["step"]
+        assert anchor["h"] == block["step"] and anchor["x"] > block["x"]
+        assert 0 < anchor["w"] and anchor["x"] + anchor["w"] == 384 - 10
+
+
+def test_spool_anchor_follows_the_line_where_the_value_starts():
+    # At size 96 "Материал:" no longer fits beside its value, so the value starts a line lower.
+    plan = r.layout_blocks(example("spool_label", font_size=96))
+    block = next(b for b in plan["blocks"] if b["field"] == "spool_rows")
+    for anchor in block["anchors"]:
+        assert 0 < anchor["w"] and anchor["x"] + anchor["w"] == 374 and anchor["h"] > 0
+        assert (
+            anchor["text_y"] + anchor["h"] <= block["text_y"] + len(block["lines"]) * block["step"]
+        )
+    first = block["anchors"][0]
+    assert first["text_y"] > block["text_y"] and first["x"] == 10
+
+
+def test_layout_blocks_authorizes_font_files_like_render_document(tmp_path):
+    font = tmp_path / "x.ttf"
+    doc = {"kind": "text", "text": "x"}
+    with pytest.raises(ValueError, match="allowed Home Assistant path"):
+        r.layout_blocks(doc, str(font))
+    with pytest.raises(ValueError, match="allowed Home Assistant path"):
+        r.layout_blocks(doc, str(font), lambda path: False)
+
+
+def test_checklist_ignores_align():
+    left = r.layout_blocks(example("checklist", align="left"))
+    centre = r.layout_blocks(example("checklist", align="center"))
+    assert left == centre
