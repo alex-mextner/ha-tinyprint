@@ -22,7 +22,7 @@ function hhea(buffer) {
   };
 }
 
-function makeFace(family, buffer) {
+function makeFace(family, buffer, entry) {
   let metrics;
   try {
     metrics = hhea(buffer);
@@ -32,6 +32,7 @@ function makeFace(family, buffer) {
   const { unitsPerEm, ascender, descender } = metrics;
   return {
     family,
+    entry,
     scaleX: 1,
     css: (size) => `${size}px "${family}"`,
     ascent: (size) => Math.ceil((ascender * size) / unitsPerEm),
@@ -86,7 +87,7 @@ export class FaceRegistry {
         throw new RenderError('font_load_failed', `font ${entry.file}: status ${fontFace.status}`);
       }
       // Parse before registering: a face that fails here must leave nothing in document.fonts.
-      const face = makeFace(family, buffer);
+      const face = makeFace(family, buffer, entry);
       document.fonts.add(fontFace);
       if (!document.fonts.has(fontFace)) {
         throw new RenderError('font_load_failed', `font ${entry.file} was not registered`);

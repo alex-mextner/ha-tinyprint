@@ -927,6 +927,446 @@
   {
    "document": {
     "fields": {
+     "color": "Чёрный",
+     "material": "PETG",
+     "nozzle": "240 °C",
+     "qr": "https://example.com/spool/42",
+     "title": "Катушка 042",
+     "weight": "750 г"
+    },
+    "kind": "template",
+    "options": {
+     "align": "center",
+     "columns": 1,
+     "font_size": 24
+    },
+    "template": "spool_label"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 28,
+      "descent": 8,
+      "field": "title",
+      "h": 57,
+      "kind": "text",
+      "lines": [
+       "Катушка 042"
+      ],
+      "size": 30,
+      "step": 41,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     },
+     {
+      "anchors": [
+       {
+        "field": "material",
+        "h": 34,
+        "text_y": 73,
+        "w": 149,
+        "x": 225
+       },
+       {
+        "field": "color",
+        "h": 34,
+        "text_y": 107,
+        "w": 192,
+        "x": 182
+       },
+       {
+        "field": "weight",
+        "h": 34,
+        "text_y": 141,
+        "w": 159,
+        "x": 215
+       },
+       {
+        "field": "nozzle",
+        "h": 34,
+        "text_y": 175,
+        "w": 176,
+        "x": 198
+       }
+      ],
+      "ascent": 23,
+      "descent": 6,
+      "field": "spool_rows",
+      "h": 152,
+      "kind": "text",
+      "lines": [
+       "Материал: PETG",
+       "Цвет: Чёрный",
+       "Остаток: 750 г",
+       "Сопло: 240 °C"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 73,
+      "w": 364,
+      "x": 10,
+      "y": 65
+     },
+     {
+      "ascent": 0,
+      "descent": 0,
+      "field": "qr",
+      "h": 296,
+      "kind": "qr",
+      "lines": [],
+      "modules": 29,
+      "size": 0,
+      "step": 0,
+      "text_y": 217,
+      "w": 296,
+      "x": 44,
+      "y": 217
+     }
+    ],
+    "rows": 521
+   },
+   "name": "spool_label-24-center",
+   "near_edge": false,
+   "qr": true
+  },
+  {
+   "document": {
+    "fields": {
+     "color": "Чёрный",
+     "material": "PETG",
+     "nozzle": "240 °C",
+     "qr": "https://example.com/spool/42",
+     "title": "Катушка 042",
+     "weight": "750 г"
+    },
+    "kind": "template",
+    "options": {
+     "align": "center",
+     "columns": 1,
+     "font_size": 96
+    },
+    "template": "spool_label"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 90,
+      "descent": 24,
+      "field": "title",
+      "h": 254,
+      "kind": "text",
+      "lines": [
+       "Катушк",
+       "а 042"
+      ],
+      "size": 96,
+      "step": 119,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     },
+     {
+      "anchors": [
+       {
+        "field": "material",
+        "h": 119,
+        "text_y": 508,
+        "w": 298,
+        "x": 76
+       },
+       {
+        "field": "color",
+        "h": 119,
+        "text_y": 746,
+        "w": 356,
+        "x": 18
+       },
+       {
+        "field": "weight",
+        "h": 119,
+        "text_y": 984,
+        "w": 321,
+        "x": 53
+       },
+       {
+        "field": "nozzle",
+        "h": 119,
+        "text_y": 1222,
+        "w": 325,
+        "x": 49
+       }
+      ],
+      "ascent": 90,
+      "descent": 24,
+      "field": "spool_rows",
+      "h": 1087,
+      "kind": "text",
+      "lines": [
+       "Матери",
+       "ал:",
+       "PETG",
+       "Цвет:",
+       "Чёрный",
+       "Остаток",
+       ": 750 г",
+       "Сопло:",
+       "240 °C"
+      ],
+      "size": 96,
+      "step": 119,
+      "text_y": 270,
+      "w": 364,
+      "x": 10,
+      "y": 262
+     },
+     {
+      "ascent": 0,
+      "descent": 0,
+      "field": "qr",
+      "h": 296,
+      "kind": "qr",
+      "lines": [],
+      "modules": 29,
+      "size": 0,
+      "step": 0,
+      "text_y": 1349,
+      "w": 296,
+      "x": 44,
+      "y": 1349
+     }
+    ],
+    "rows": 1653
+   },
+   "name": "spool_label-96-center",
+   "near_edge": false,
+   "qr": true
+  },
+  {
+   "document": {
+    "fields": {
+     "color": "Чёрный",
+     "material": "PETG",
+     "nozzle": "240 °C",
+     "qr": "https://example.com/spool/42",
+     "title": "Катушка 042",
+     "weight": "750 г"
+    },
+    "kind": "template",
+    "options": {
+     "align": "right",
+     "columns": 1,
+     "font_size": 24
+    },
+    "template": "spool_label"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 28,
+      "descent": 8,
+      "field": "title",
+      "h": 57,
+      "kind": "text",
+      "lines": [
+       "Катушка 042"
+      ],
+      "size": 30,
+      "step": 41,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     },
+     {
+      "anchors": [
+       {
+        "field": "material",
+        "h": 34,
+        "text_y": 73,
+        "w": 58,
+        "x": 316
+       },
+       {
+        "field": "color",
+        "h": 34,
+        "text_y": 107,
+        "w": 87,
+        "x": 287
+       },
+       {
+        "field": "weight",
+        "h": 34,
+        "text_y": 141,
+        "w": 57,
+        "x": 317
+       },
+       {
+        "field": "nozzle",
+        "h": 34,
+        "text_y": 175,
+        "w": 71,
+        "x": 303
+       }
+      ],
+      "ascent": 23,
+      "descent": 6,
+      "field": "spool_rows",
+      "h": 152,
+      "kind": "text",
+      "lines": [
+       "Материал: PETG",
+       "Цвет: Чёрный",
+       "Остаток: 750 г",
+       "Сопло: 240 °C"
+      ],
+      "size": 24,
+      "step": 34,
+      "text_y": 73,
+      "w": 364,
+      "x": 10,
+      "y": 65
+     },
+     {
+      "ascent": 0,
+      "descent": 0,
+      "field": "qr",
+      "h": 296,
+      "kind": "qr",
+      "lines": [],
+      "modules": 29,
+      "size": 0,
+      "step": 0,
+      "text_y": 217,
+      "w": 296,
+      "x": 44,
+      "y": 217
+     }
+    ],
+    "rows": 521
+   },
+   "name": "spool_label-24-right",
+   "near_edge": false,
+   "qr": true
+  },
+  {
+   "document": {
+    "fields": {
+     "color": "Чёрный",
+     "material": "PETG",
+     "nozzle": "240 °C",
+     "qr": "https://example.com/spool/42",
+     "title": "Катушка 042",
+     "weight": "750 г"
+    },
+    "kind": "template",
+    "options": {
+     "align": "right",
+     "columns": 1,
+     "font_size": 96
+    },
+    "template": "spool_label"
+   },
+   "expect": {
+    "blocks": [
+     {
+      "ascent": 90,
+      "descent": 24,
+      "field": "title",
+      "h": 254,
+      "kind": "text",
+      "lines": [
+       "Катушк",
+       "а 042"
+      ],
+      "size": 96,
+      "step": 119,
+      "text_y": 16,
+      "w": 364,
+      "x": 10,
+      "y": 8
+     },
+     {
+      "anchors": [
+       {
+        "field": "material",
+        "h": 119,
+        "text_y": 508,
+        "w": 231,
+        "x": 143
+       },
+       {
+        "field": "color",
+        "h": 119,
+        "text_y": 746,
+        "w": 347,
+        "x": 27
+       },
+       {
+        "field": "weight",
+        "h": 119,
+        "text_y": 984,
+        "w": 278,
+        "x": 96
+       },
+       {
+        "field": "nozzle",
+        "h": 119,
+        "text_y": 1222,
+        "w": 286,
+        "x": 88
+       }
+      ],
+      "ascent": 90,
+      "descent": 24,
+      "field": "spool_rows",
+      "h": 1087,
+      "kind": "text",
+      "lines": [
+       "Матери",
+       "ал:",
+       "PETG",
+       "Цвет:",
+       "Чёрный",
+       "Остаток",
+       ": 750 г",
+       "Сопло:",
+       "240 °C"
+      ],
+      "size": 96,
+      "step": 119,
+      "text_y": 270,
+      "w": 364,
+      "x": 10,
+      "y": 262
+     },
+     {
+      "ascent": 0,
+      "descent": 0,
+      "field": "qr",
+      "h": 296,
+      "kind": "qr",
+      "lines": [],
+      "modules": 29,
+      "size": 0,
+      "step": 0,
+      "text_y": 1349,
+      "w": 296,
+      "x": 44,
+      "y": 1349
+     }
+    ],
+    "rows": 1653
+   },
+   "name": "spool_label-96-right",
+   "near_edge": false,
+   "qr": true
+  },
+  {
+   "document": {
+    "fields": {
      "text": "a\tb\tcol\n\tindented\tx"
     },
     "kind": "template",

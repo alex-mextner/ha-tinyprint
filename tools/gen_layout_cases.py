@@ -110,6 +110,12 @@ def _case_documents() -> list[tuple[str, dict, bool]]:
     for name, spec in render.TEMPLATES.items():
         for size in (24, 96):
             cases.append((f"{name}-{size}", template(name, spec["example"], font_size=size), False))
+    # The spool anchors depend on the aligned start x of each line (R11).
+    spool = render.TEMPLATES["spool_label"]["example"]
+    for align in ("center", "right"):
+        for size in (24, 96):
+            doc = template("spool_label", spool, font_size=size, align=align)
+            cases.append((f"spool_label-{size}-{align}", doc, False))
     notes = {
         "note-tab": "a\tb\tcol\n\tindented\tx",
         "note-emoji": "Привет 😀 мир 😀😀 конец",
