@@ -10,6 +10,7 @@ const MODULES = Promise.all([
   import('./studio/status.js'),
   import('./studio/options.js'),
   import('./studio/live.js'),
+  import('./studio/strip.js'),
 ]);
 MODULES.catch(() => {}); // mount() reports the failure
 
@@ -54,6 +55,10 @@ class TinyPrintPanel extends HTMLElement {
     this.drafts = {};
     this.renderer = null;
     this.scheduler = null;
+    this.strip = null;
+    this.stripObserver = null;
+    this.zoom = 1;
+    this.zoomChosen = false; // until the user presses #zoom the card width picks the scale
     this.lastResult = null;
     this.failure = null;
     this.image = null;
@@ -83,6 +88,8 @@ class TinyPrintPanel extends HTMLElement {
   disconnectedCallback() {
     this.epoch += 1;
     this.imageLoadSequence += 1;
+    this.stripObserver?.disconnect();
+    this.strip?.dispose();
     this.scheduler?.dispose();
     this.renderer?.dispose();
     this.initState();
@@ -92,8 +99,8 @@ class TinyPrintPanel extends HTMLElement {
   async mount() {
     const epoch = this.epoch;
     try {
-      const [renderer, image, pack, state, status, options, live] = await MODULES;
-      this.modules = { renderer, image, pack, state, status, options, live };
+      const [renderer, image, pack, state, status, options, live, strip] = await MODULES;
+      this.modules = { renderer, image, pack, state, status, options, live, strip };
     } catch (error) {
       this.shadowRoot.textContent = `Не удалось загрузить модули панели: ${error.message || error}`;
       return;
@@ -143,10 +150,14 @@ class TinyPrintPanel extends HTMLElement {
         .button { border:1px solid var(--divider-color,#cdd5dd); background:var(--card-background-color,#fff); border-radius:9px; padding:10px 15px; min-height:44px; }
         .primary { background:var(--primary-color,#007a73); border-color:transparent; color:var(--text-primary-color,#fff); font-weight:650; flex:1; }
         .strip-card { position:sticky; top:18px; } h2 { margin:0; font-size:18px; } .strip-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
-        .canvas { background:var(--secondary-background-color,#edf0f3); border-radius:10px; min-height:300px; max-height:600px; overflow:auto; margin:18px 0 12px; padding:20px 12px; display:flex; align-items:flex-start; justify-content:safe center; }
+        .canvas { background:var(--secondary-background-color,#edf0f3); border-radius:10px; min-height:300px; max-height:600px; overflow:auto; margin:18px 0 12px; padding:20px 12px; display:flex; flex-direction:column; align-items:safe center; }
+        .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; } .chip { border:1px dashed var(--secondary-text-color,#697580); background:transparent; border-radius:999px; padding:4px 12px; min-height:32px; font-size:13px; }
+        .box { background:white; } .overlay::selection { background:rgba(0,122,115,.3); color:transparent; }
+        .overlay:not(.loose)::placeholder { color:transparent; opacity:1; } .overlay:not(.loose):focus-visible { outline-offset:0; } .overlay.slot:not(:focus) { pointer-events:none; }
+        #docked:not(:empty) { margin-top:16px; }
         .empty { padding:54px 12px; text-align:center; max-width:270px; color:var(--secondary-text-color,#697580); font-size:14px; }
         .empty .symbol { font-size:40px; display:block; margin-bottom:12px; }
-        #raster { display:block; flex:none; width:384px; max-width:none; height:auto; background:white; box-shadow:0 4px 15px #0002; image-rendering:pixelated; }
+        #raster { display:block; width:384px; max-width:none; height:auto; background:white; box-shadow:0 4px 15px #0002; image-rendering:pixelated; }
         #raster.ghost { opacity:.55; }
         .caption { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; font-size:12px; color:var(--secondary-text-color,#697580); }
         #notice { padding:12px 15px; border-radius:9px; background:var(--secondary-background-color,#e9efee); margin:18px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -162,7 +173,7 @@ class TinyPrintPanel extends HTMLElement {
           <section class="card" aria-label="Редактор этикетки">
             <div class="tabs" role="tablist"><button data-mode="template" role="tab" aria-selected="true">Шаблоны</button><button data-mode="qr" role="tab" aria-selected="false">QR-код</button><button data-mode="image" role="tab" aria-selected="false">Картинка</button></div>
             <fieldset id="editor">
-              <div id="template-form"><div class="field"><label for="template">Макет этикетки</label><select id="template"></select></div><div id="fields"></div></div>
+              <div id="template-form"><div class="field"><label for="template">Макет этикетки</label><select id="template"></select></div></div>
               <div id="qr-form" hidden><div class="field"><label for="qr-data">Ссылка или данные QR</label><textarea id="qr-data" maxlength="500" placeholder="https://…"></textarea></div><p class="hint">Целые модули и белое поле сохраняются. Фотофильтры к QR не применяются.</p></div>
               <div id="image-form" hidden>
                 <div class="field"><label for="image-file">Изображение с телефона или компьютера</label><input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"><p id="file-name" class="hint">${FILE_HINT}</p></div>
@@ -177,11 +188,11 @@ class TinyPrintPanel extends HTMLElement {
             </fieldset>
             <div class="buttons"><button id="print" class="button primary" disabled>Печатать</button><button id="cancel" class="button" hidden>Остановить</button></div>
           </section>
-          <section class="card strip-card" aria-label="Бумажная лента"><div class="strip-head"><h2>На бумаге</h2><span class="badge">384 точки</span></div><div class="canvas"><div id="empty" class="empty"><span class="symbol" aria-hidden="true">▤</span><span id="empty-text">${EMPTY_STRIP_TEXT}</span></div><canvas id="raster" width="384" height="1" role="img" aria-label="Готовый чёрно-белый растр для печати" hidden></canvas></div><div class="caption"><span id="dimensions"></span><span id="ink"></span></div><div id="notice" role="status" aria-live="polite" hidden></div><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
+          <section class="card strip-card" aria-label="Бумажная лента"><div class="strip-head"><h2>На бумаге</h2><span class="badge">384 точки</span><button id="zoom" class="button" aria-label="Масштаб ленты" aria-pressed="false">1×</button></div><div id="paper"></div><div class="caption"><span id="dimensions"></span><span id="ink"></span></div><div id="notice" role="status" aria-live="polite" hidden></div><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
         </div>
       </main>`;
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => this.switchMode(button.dataset.mode)));
-    this.$('#template').addEventListener('change', () => { this.showFields(); this.renderIfChanged(); });
+    this.$('#template').addEventListener('change', () => { this.syncFields(); this.renderIfChanged(); });
     this.$('#device').addEventListener('change', () => { this.needsDevicePick = this.$('#device').value === ''; this.deviceStatus(); this.refreshJob(); this.showAction(); });
     this.$('#preset').addEventListener('change', () => this.applyPreset());
     this.$('#image-file').addEventListener('change', event => this.readImage(event));
@@ -193,6 +204,11 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#diagnose').addEventListener('click', () => this.diagnose());
     this.$('#automation').addEventListener('toggle', () => this.showAction());
     this.$('#copy').addEventListener('click', () => this.copyAction());
+    this.strip = new this.modules.strip.PaperStrip(this.$('#paper'));
+    this.strip.show(null, this.zoom, { emptyText: EMPTY_STRIP_TEXT });
+    this.$('#zoom').addEventListener('click', () => { this.zoomChosen = true; this.setZoom(this.zoom === 1 ? 2 : 1); });
+    this.stripObserver = new ResizeObserver(() => this.fitZoom());
+    this.stripObserver.observe(this.$('#paper'));
   }
 
   range(id, title, min, max, step, value) {
@@ -261,7 +277,7 @@ class TinyPrintPanel extends HTMLElement {
         this.fillSelect(this.$('#template'), Object.entries(this.templates).map(([key, item]) => [key, item.name]), 'note');
         this.fillSelect(this.$('#preset'), Object.entries(this.presets).map(([key, item]) => [key, item.name]), 'photo');
         this.loaded = true;
-        this.showFields();
+        this.syncFields();
         this.renderNow();
       }
       this.deviceStatus(); this.refreshJob(); this.showAction();
@@ -300,22 +316,35 @@ class TinyPrintPanel extends HTMLElement {
   fieldCaption(template, field) {
     return template === 'checklist' && field === 'text' ? CHECKLIST_TEXT_CAPTION : (FIELD_CAPTIONS[field] || field);
   }
-  showFields() {
+  /** One entry per editable field of the chosen template, values read from the drafts (never stale). */
+  fieldSpecs() {
     const key = this.$('#template').value;
     const spec = this.templates[key];
-    const box = this.$('#fields'); box.replaceChildren();
-    if (!spec) return;
+    if (this.mode !== 'template' || !spec) return [];
     const draft = this.modules.state.draftFor(this.drafts, key);
-    for (const field of spec.fields) {
-      const wrap = document.createElement('div'); wrap.className = 'field';
-      const label = document.createElement('label'); label.htmlFor = `field-${field}`; label.textContent = this.fieldCaption(key, field);
-      const input = document.createElement(field === 'text' ? 'textarea' : 'input');
-      input.id = `field-${field}`; input.dataset.field = field; input.maxLength = field === 'qr' ? 500 : 3000;
-      input.value = draft[field] || ''; input.required = spec.required.includes(field);
+    return spec.fields.map(field => ({
+      key: field,
+      caption: this.fieldCaption(key, field),
+      multiline: field === 'text',
+      value: draft[field] || '',
       // The example is a placeholder only: it is never a value, so it can never be printed.
-      input.placeholder = spec.example[field] ?? '';
-      wrap.append(label, input); box.append(wrap);
-    }
+      placeholder: spec.example[field] ?? '',
+      maxLength: field === 'qr' ? 500 : 3000,
+      required: spec.required.includes(field),
+    }));
+  }
+  /** The controls' values over the renderer defaults (a control that does not exist yet keeps its default). */
+  effectiveOptions() { return { ...this.modules.renderer.DEFAULT_OPTIONS, ...this.readOptions() }; }
+  /** Overlay or docked per field, from the options now in the controls. */
+  syncFields() {
+    const options = this.effectiveOptions();
+    const { fieldEditMode, EDIT_POLICY } = this.modules.strip;
+    const mode = field => fieldEditMode(field, { columns: options.columns, policy: EDIT_POLICY, font: options.font, width: options.font_width });
+    this.strip.setFields(this.fieldSpecs(), mode, (field, value) => this.onFieldInput(field, value));
+  }
+  onFieldInput(field, value) {
+    this.drafts = this.modules.state.withDraftField(this.drafts, this.$('#template').value, field, value);
+    this.renderIfChanged();
   }
   switchMode(mode) {
     if (this.printing) return;
@@ -324,11 +353,11 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#type-options').hidden = mode === 'image';
     this.$('#qr-options').hidden = mode === 'image';
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.mode === mode)));
+    this.syncFields();
     this.renderNow();
   }
   onEdit(event) {
     const control = event.target;
-    if (control.dataset.field) this.drafts = this.modules.state.withDraftField(this.drafts, this.$('#template').value, control.dataset.field, control.value);
     if (control.type === 'range') this.$(`#value-${control.id}`).textContent = control.value;
     if (control.id !== 'preset') this.renderIfChanged();
   }
@@ -430,19 +459,25 @@ class TinyPrintPanel extends HTMLElement {
     this.updateButtons(); this.showAction();
   }
   drawStrip(result, emptyText = result?.note ?? EMPTY_STRIP_TEXT) {
-    const canvas = this.$('#raster');
-    const shown = Boolean(result?.pixels);
-    canvas.hidden = !shown;
-    this.$('#empty').hidden = shown;
-    this.$('#empty-text').textContent = emptyText;
+    const options = this.effectiveOptions();
+    // The modes follow the options (columns, font, width): refresh them before the strip places inputs.
+    this.syncFields();
+    this.strip.show(result, this.zoom, { template: this.$('#template').value, fontSize: options.font_size, align: options.align, emptyText });
     this.$('#dimensions').textContent = '';
     this.$('#ink').textContent = '';
-    if (!shown) { canvas.classList.remove('ghost'); return; }
-    if (canvas.height !== result.rows) canvas.height = result.rows;
-    canvas.getContext('2d').putImageData(result.pixels, 0, 0);
-    canvas.classList.toggle('ghost', Boolean(result.ghost));
-    this.$('#dimensions').textContent = result.ghost ? 'Пример макета: введите свой текст' : `${canvas.width} × ${result.rows} точек`;
+    if (!result?.pixels) return;
+    this.$('#dimensions').textContent = result.ghost ? 'Пример макета: введите свой текст' : `${this.$('#raster').width} × ${result.rows} точек`;
     if (!result.ghost && !result.partial) this.$('#ink').textContent = `Чёрного: ${Math.round(result.inkPercent * 100) / 100}%`;
+  }
+  /** 1x or 2x, never in between: a fractional scale would resample the 1-bit bitmap. */
+  setZoom(zoom) {
+    this.zoom = zoom;
+    this.$('#zoom').textContent = `${zoom}×`;
+    this.$('#zoom').setAttribute('aria-pressed', String(zoom === 2));
+    this.strip.setZoom(zoom);
+  }
+  fitZoom() {
+    if (!this.zoomChosen) this.setZoom(this.modules.strip.autoZoom(this.$('#paper').clientWidth - 24)); // .canvas has 12px side padding
   }
 
   /** Every Print blocker, derived from the scheduler's results and the CURRENT `hass`. */
@@ -478,6 +513,7 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#diagnose').disabled = this.pendingCall || !this.$('#device').value;
     this.$('#cancel').hidden = !this.printing;
     this.$('#editor').disabled = this.printing;
+    this.strip.setDisabled(this.printing);
     this.$('#device').disabled = this.printing;
   }
 

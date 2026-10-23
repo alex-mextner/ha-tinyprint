@@ -415,32 +415,43 @@ async def check_sent_bytes_equal_pixels(p, browser):
 
 
 async def check_strip_is_crisp(p, browser):
-    """R9: unpacked 1-bit bitmap, pixelated, integer scale; x3 screenshot has only black and white."""
+    """R9: unpacked 1-bit bitmap, pixelated, integer scale; x3 screenshots (1x and 2x, overlays in place) are pure black and white."""
     async with panel(
         p, browser, viewport={"width": 1360, "height": 1080}, device_scale_factor=3
     ) as page:
         await fill_text(page, "Привет, мир\nвторая строка")
         await settle(page)
-        style = await page.evaluate(
-            f"""() => {{
-              const c = {PANEL}.shadowRoot.querySelector('#raster'); const s = getComputedStyle(c);
-              return [s.imageRendering, parseFloat(s.width), c.width, window.devicePixelRatio, c.tagName];
-            }}"""
-        )
-        assert style[0] == "pixelated" and style[4] == "CANVAS", style
-        assert style[3] == 3 and style[1] % style[2] == 0, style
-        await page.locator("#raster").scroll_into_view_if_needed()
-        shot = OUT / "strip-x3.png"
-        await page.locator("#raster").screenshot(path=str(shot))
-        # The element box is rounded out to whole device pixels: crop the rim (page background and
-        # shadow) so only the canvas pixels are judged.
-        image = Image.open(shot).convert("RGB")
-        image = image.crop((3, 3, image.width - 3, image.height - 3))
-        assert image.width >= 384 * 3 - 6, image.size
-        colors = {color for _, color in image.getcolors(maxcolors=image.width * image.height)}
-        assert colors <= {(0, 0, 0), (255, 255, 255)}, sorted(colors)[:6]
-        assert (0, 0, 0) in colors
-        shot.unlink()
+        # The inputs sit on the strip (their text is transparent): the bitmap under them is what is seen.
+        assert await page.locator(".box .overlay").count() == 3
+        for zoom in (1, 2):
+            if zoom == 2:
+                await page.locator("#zoom").click()
+                # Let the whole doubled strip show: an element screenshot is clipped by the scroll box.
+                await page.evaluate(
+                    f"() => {{ const c = {PANEL}.shadowRoot.querySelector('.canvas'); c.style.overflow = 'visible'; c.style.maxHeight = 'none'; }}"
+                )
+            style = await page.evaluate(
+                f"""() => {{
+                  const c = {PANEL}.shadowRoot.querySelector('#raster'); const s = getComputedStyle(c);
+                  return [s.imageRendering, parseFloat(s.width), c.width, window.devicePixelRatio, c.tagName, c.getBoundingClientRect().width];
+                }}"""
+            )
+            assert style[0] == "pixelated" and style[4] == "CANVAS", style
+            assert style[3] == 3 and style[1] % style[2] == 0 and style[5] == 384 * zoom, style
+            # Blur the field: the caret and the focus ring are interface, not bitmap.
+            await page.evaluate(f"() => {PANEL}.shadowRoot.activeElement?.blur()")
+            await page.locator("#raster").scroll_into_view_if_needed()
+            shot = OUT / f"strip-x3-{zoom}x.png"
+            await page.locator("#raster").screenshot(path=str(shot))
+            # The element box is rounded out to whole device pixels: crop the rim (page background and
+            # shadow) so only the canvas pixels are judged.
+            image = Image.open(shot).convert("RGB")
+            image = image.crop((3, 3, image.width - 3, image.height - 3))
+            assert image.width >= 384 * 3 * zoom - 6, image.size
+            colors = {color for _, color in image.getcolors(maxcolors=image.width * image.height)}
+            assert colors <= {(0, 0, 0), (255, 255, 255)}, (zoom, sorted(colors)[:6])
+            assert (0, 0, 0) in colors
+            shot.unlink()
 
 
 async def check_one_click_sends_once(p, browser):
@@ -873,7 +884,7 @@ async def check_injection(p, browser):
         await page.wait_for_timeout(30)
         assert await page.evaluate("() => window.pwned === undefined")
         assert await page.locator("#action-data img").count() == 0
-        assert await page.locator("#fields img").count() == 0
+        assert await page.locator("#paper img").count() == 0
         assert "<img" in await page.locator("#action-data").inner_text()
 
 
@@ -926,6 +937,517 @@ async def check_mobile_and_screens(p, browser, image_file, shoot):
         await settle(page)
         await page.evaluate(f"() => {{ {PANEL}.scrollTop = 0; }}")
         await shoot(page, "studio-image.png")
+
+
+# ------------------------------------------------------- Task 18: paper strip and overlays
+
+STRIP_JS = f"{STATIC}studio/strip.js"
+# The line box centres a glyph row in `step`, which is ascent + descent + 5 rows: the overlay box sits
+# half of those 5 rows higher so its baseline is the bitmap's (asserted below as step - ascent - descent == 5).
+HALF_LEADING = -2.5
+OVERLAY_RECT = f"""(key) => {{
+  const root = {PANEL}.shadowRoot;
+  const box = root.querySelector('.box').getBoundingClientRect();
+  const r = root.querySelector('#field-' + key).getBoundingClientRect();
+  const scale = box.width / 384;
+  return {{ x: (r.left - box.left) / scale, y: (r.top - box.top) / scale, w: r.width / scale, h: r.height / scale }};
+}}"""
+PLAN_BLOCK = f"""(key) => {{
+  const b = {PANEL}.lastResult.blocks.find((block) => block.field === key);
+  return b && {{ x: b.x, y: b.text_y, w: b.w, h: b.h, step: b.step, ascent: b.ascent, descent: b.descent, size: b.size, align: b.align, lines: b.lines.length, family: b.face.family }};
+}}"""
+ACTIVE_ID = f"() => {PANEL}.shadowRoot.activeElement?.id ?? null"
+TWO_FRAMES = "() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))"
+CANVAS_HASH = f"""() => {{
+  const c = {PANEL}.shadowRoot.querySelector('#raster');
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  let h = 0; for (let i = 0; i < d.length; i += 1) h = (h * 31 + d[i]) | 0;
+  return [h, c.height];
+}}"""
+
+
+async def fill_note(page):
+    await fill_text(page, "Заголовок", "title")
+    await fill_text(page, "Первая строка\nВторая строка", "text")
+    await fill_text(page, "Низ", "footer")
+    await settle(page)
+
+
+async def assert_rect(page, key, want, context):
+    got = await page.evaluate(OVERLAY_RECT, key)
+    for axis in "xywh":
+        assert abs(got[axis] - want[axis]) <= 1, (context, key, axis, got, want)
+
+
+async def assert_overlays_on_blocks(page, keys, context):
+    for key in keys:
+        block = await page.evaluate(PLAN_BLOCK, key)
+        assert block["step"] - block["ascent"] - block["descent"] == 5, block
+        want = {
+            "x": block["x"],
+            "y": block["y"] + HALF_LEADING,
+            "w": block["w"],
+            "h": block["h"] - 16,
+        }
+        await assert_rect(page, key, want, context)
+
+
+async def check_edit_mode_table(p, browser):
+    async with panel(p, browser) as page:
+        table = await page.evaluate(
+            """async (url) => {
+              const { fieldEditMode, autoZoom } = await import(url);
+              const mode = (field, columns, policy, font, width) => fieldEditMode(field, { columns, policy, font, width });
+              return [
+                mode('title', 1, 'overlay', 'roboto_flex', 100),
+                mode('title', 1, 'overlay', 'tiny5', 200),
+                mode('text', 1, 'overlay', 'roboto_flex', 100),
+                mode('text', 2, 'overlay', 'roboto_flex', 100),
+                mode('footer', 3, 'overlay', 'roboto_flex', 100),
+                mode('qr', 1, 'overlay', 'roboto_flex', 100),
+                mode('title', 1, 'docked-all', 'roboto_flex', 100),
+                mode('title', 1, 'overlay', 'tiny5', 100),
+                [autoZoom(767), autoZoom(768)],
+              ];
+            }""",
+            STRIP_JS,
+        )
+        expected = [
+            "overlay",
+            "docked",
+            "overlay",
+            "docked",
+            "overlay",
+            "docked",
+            "docked",
+            "overlay",
+        ]
+        assert table == [*expected, [1, 2]], table
+        assert (
+            await page.evaluate("async (url) => (await import(url)).EDIT_POLICY", STRIP_JS)
+            == "overlay"
+        )
+
+
+async def check_overlay_geometry(p, browser):
+    """Overlay rect = block rect (x, text_y + half leading, w, h - 16) at 1x, 2x and on a phone."""
+    async with panel(p, browser, viewport={"width": 1360, "height": 1080}) as page:
+        await fill_note(page)
+        assert await page.evaluate(f"() => {PANEL}.zoom") == 1  # the card is narrower than 768
+        await assert_overlays_on_blocks(page, ["title", "text", "footer"], "1x")
+        await page.locator("#zoom").click()
+        assert await page.evaluate(f"() => {PANEL}.zoom") == 2
+        matrix = await page.evaluate(
+            f"() => getComputedStyle({PANEL}.shadowRoot.querySelector('.box')).transform"
+        )
+        assert matrix == "matrix(2, 0, 0, 2, 0, 0)", (
+            matrix
+        )  # an integer scale: the 1-bit bitmap never resamples
+        await assert_overlays_on_blocks(page, ["title", "text", "footer"], "2x")
+        await page.set_viewport_size({"width": 390, "height": 844})
+        await assert_overlays_on_blocks(page, ["title", "text", "footer"], "2x at 390px")
+        await page.locator("#zoom").click()
+        await assert_overlays_on_blocks(page, ["title", "text", "footer"], "1x at 390px")
+        scrolls = await page.evaluate(
+            f"() => {{ const c = {PANEL}.shadowRoot.querySelector('.canvas'); return [c.scrollWidth, c.clientWidth]; }}"
+        )
+        assert scrolls[0] > scrolls[1], scrolls  # narrow card: the strip scrolls, it is not shrunk
+
+
+async def check_zoom_rule(p, browser):
+    async with panel(p, browser, viewport={"width": 390, "height": 844}) as page:
+        assert await page.evaluate(f"() => {PANEL}.zoom") == 1
+        assert await page.locator("#zoom").inner_text() == "1×"
+        await page.locator("#zoom").click()
+        assert await page.locator("#zoom").get_attribute("aria-pressed") == "true"
+        assert await page.locator("#zoom").inner_text() == "2×"
+        width = await page.evaluate(
+            f"() => {PANEL}.shadowRoot.querySelector('.stage').getBoundingClientRect().width"
+        )
+        assert width == 768, width
+
+
+async def check_overlay_font(p, browser):
+    async with panel(p, browser) as page:
+        await fill_note(page)
+        for key in ("title", "text", "footer"):
+            info = await page.evaluate(
+                f"""(key) => {{
+                  const el = {PANEL}.shadowRoot.querySelector('#field-' + key); const s = getComputedStyle(el);
+                  return {{ tag: el.tagName, family: s.fontFamily, size: s.fontSize, color: s.color, caret: s.caretColor, align: s.textAlign, lineHeight: s.lineHeight, face: {PANEL}.lastResult.face.family, aria: el.getAttribute('aria-label') }};
+                }}""",
+                key,
+            )
+            block = await page.evaluate(PLAN_BLOCK, key)
+            family = info["family"].strip("\"'")
+            assert re.fullmatch(r"tp-[a-z0-9_]+-w\d+-W\d+", family), info
+            assert family == info["face"] == block["family"], info
+            assert info["tag"] == "TEXTAREA" and info["aria"], info
+            assert (
+                info["size"] == f"{block['size']}px" and info["lineHeight"] == f"{block['step']}px"
+            ), (info, block)
+            assert info["color"] in ("rgba(0, 0, 0, 0)", "transparent"), info
+            assert info["caret"] not in ("rgba(0, 0, 0, 0)", "transparent", "auto"), info
+            assert info["align"] == block["align"], (info, block)
+        title = await page.evaluate(PLAN_BLOCK, "title")
+        assert title["align"] == "center"
+        await page.locator("#align").select_option("right")
+        await page.locator("#font_size").fill("36")
+        await settle(page)
+        for key, align in (("text", "right"), ("title", "center"), ("footer", "center")):
+            block = await page.evaluate(PLAN_BLOCK, key)
+            style = await page.evaluate(
+                f"(key) => {{ const s = getComputedStyle({PANEL}.shadowRoot.querySelector('#field-' + key)); return [s.fontSize, s.textAlign]; }}",
+                key,
+            )
+            assert style == [f"{block['size']}px", align] and block["align"] == align, (
+                key,
+                style,
+                block,
+            )
+        assert (await page.evaluate(PLAN_BLOCK, "text"))["size"] == 36
+        await assert_overlays_on_blocks(page, ["title", "text", "footer"], "size 36, right")
+
+
+def ink_rows(shot, top, bottom, threshold):
+    image = Image.open(shot).convert("L")
+    rows = [
+        y
+        for y in range(top, min(bottom, image.height))
+        if any(image.getpixel((x, y)) < threshold for x in range(image.width))
+    ]
+    return rows[0], rows[-1]
+
+
+async def baseline_shift(page, key, shot):
+    """First/last ink rows of the bitmap vs those of the overlay text made visible, relative to text_y."""
+    block = await page.evaluate(PLAN_BLOCK, key)
+    top, bottom = block["y"], block["y"] + block["lines"] * block["step"]
+    await page.evaluate(f"() => {PANEL}.shadowRoot.activeElement?.blur()")
+    box = page.locator(".box")
+    await box.screenshot(path=str(shot))
+    drawn = ink_rows(shot, top, bottom, 128)
+    await page.evaluate(
+        f"""(key) => {{
+          const root = {PANEL}.shadowRoot;
+          root.querySelector('#raster').style.visibility = 'hidden';
+          const el = root.querySelector('#field-' + key); el.style.color = '#000'; el.style.caretColor = 'transparent';
+        }}""",
+        key,
+    )
+    await box.screenshot(path=str(shot))
+    typed = ink_rows(shot, top, bottom, 160)
+    await page.evaluate(
+        f"""(key) => {{
+          const root = {PANEL}.shadowRoot;
+          root.querySelector('#raster').style.visibility = '';
+          const el = root.querySelector('#field-' + key); el.style.color = 'transparent';
+        }}""",
+        key,
+    )
+    return drawn, typed
+
+
+async def check_overlay_baseline(p, browser):
+    """With the overlay text made visible its first and last ink rows equal the bitmap's within 1 dot."""
+    shot = OUT / "baseline.png"
+    async with panel(p, browser, viewport={"width": 1360, "height": 1080}) as page:
+        await fill_text(page, "H", "title")
+        await settle(page)
+        drawn, typed = await baseline_shift(page, "title", shot)
+        assert abs(drawn[0] - typed[0]) <= 1 and abs(drawn[1] - typed[1]) <= 1, (drawn, typed)
+        await page.locator("#template").select_option("heading")
+        await page.locator("#font_size").fill("48")
+        await fill_text(page, "HHHH HHHH", "title")
+        await settle(page)
+        block = await page.evaluate(PLAN_BLOCK, "title")
+        assert block["lines"] > 1 and block["size"] >= 60, block  # a wrapped heading
+        drawn, typed = await baseline_shift(page, "title", shot)
+        assert abs(drawn[0] - typed[0]) <= 1 and abs(drawn[1] - typed[1]) <= 1, (drawn, typed)
+    shot.unlink(missing_ok=True)
+
+
+async def check_typing_updates_strip(p, browser):
+    async with panel(p, browser) as page:
+        await fill_text(page, "Я")
+        await settle(page)
+        before = await page.evaluate(CANVAS_HASH)
+        sent = len(await calls(page))
+        await page.keyboard.type("Ж")
+        await page.evaluate(TWO_FRAMES)
+        assert await page.evaluate(CANVAS_HASH) != before
+        assert len(await calls(page)) == sent  # editing never calls a service
+
+
+async def check_blank_field_keeps_focus(p, browser):
+    async with panel(p, browser) as page:
+        await fill_text(page, "Заголовок", "title")
+        await settle(page)
+        chips = await page.locator("#chips button").all_inner_texts()
+        assert chips == ["+ Текст", "+ Подпись снизу"], chips
+        slot = await page.evaluate(
+            f"() => {PANEL}.lastResult.slots.find((s) => s.field === 'footer')"
+        )
+        assert slot and not await page.evaluate(PLAN_BLOCK, "footer")
+        await page.locator('#chips button[data-field="footer"]').click()
+        assert await page.evaluate(ACTIVE_ID) == "field-footer"
+        await page.evaluate(
+            f"() => {{ window.keptFooter = {PANEL}.shadowRoot.querySelector('#field-footer'); }}"
+        )
+        await page.keyboard.type("abc")
+        await settle(page)
+        same, caret, value = await page.evaluate(
+            f"""() => {{ const el = {PANEL}.shadowRoot.querySelector('#field-footer');
+              return [el === window.keptFooter && {PANEL}.shadowRoot.activeElement === el, el.selectionStart, el.value]; }}"""
+        )
+        assert same and caret == 3 and value == "abc", (same, caret, value)
+        block = await page.evaluate(PLAN_BLOCK, "footer")
+        assert block["y"] == slot["y"], (
+            block,
+            slot,
+        )  # the footer appears exactly where its slot was
+        await assert_overlays_on_blocks(page, ["footer"], "after the first characters")
+        assert await page.locator("#chips button").all_inner_texts() == ["+ Текст"]
+        assert await page.locator("#field-footer").count() == 1
+
+
+async def check_unplaced_fields_stay_editable(p, browser):
+    """qr_label with a blank QR draws nothing: the typed title must stay visible, focused and editable."""
+    async with panel(p, browser) as page:
+        await page.locator("#template").select_option("qr_label")
+        await settle(page)
+        await page.locator("#field-title").focus()
+        await page.keyboard.type("Кат")
+        await settle(page)
+        assert await page.locator("#raster").is_hidden()
+        assert await page.evaluate(ACTIVE_ID) == "field-title"
+        info = await page.evaluate(
+            f"""() => {{ const el = {PANEL}.shadowRoot.querySelector('#field-title'); const s = getComputedStyle(el);
+              return [el.classList.contains('loose'), s.color, el.selectionStart, el.getBoundingClientRect().height]; }}"""
+        )
+        assert (
+            info[0]
+            and info[1] not in ("rgba(0, 0, 0, 0)", "transparent")
+            and info[2] == 3
+            and info[3] > 20
+        ), info
+        await page.keyboard.type("а")
+        await fill_text(page, "https://example.org/x", "qr")
+        await settle(page)
+        assert await page.locator("#raster").is_visible()
+        assert not await page.evaluate(
+            f"() => {PANEL}.shadowRoot.querySelector('#field-title').classList.contains('loose')"
+        )
+        await assert_overlays_on_blocks(page, ["title"], "back on the strip")
+        assert await page.locator("#field-title").input_value() == "Ката"
+
+
+async def check_qr_and_columns_are_docked(p, browser):
+    async with panel(p, browser) as page:
+        await page.locator("#template").select_option("qr_label")
+        await settle(page)
+        qr = page.locator("#field-qr")
+        assert await qr.evaluate("(e) => e.closest('#docked') !== null") and await qr.is_visible()
+        assert await page.locator('label[for="field-qr"]').inner_text() == "Ссылка или данные QR"
+        assert await page.locator("#chips button").all_inner_texts() == [
+            "+ Заголовок",
+            "+ Подпись снизу",
+        ]
+        assert await page.locator("#field-title").evaluate("(e) => e.closest('.box') !== null")
+        await page.locator("#template").select_option("note")
+        await fill_text(page, "Верх", "title")
+        await fill_text(page, "один\nдва\nтри\nчетыре", "text")
+        await settle(page)
+        await page.evaluate(
+            f"""() => {{ const p = {PANEL}; const read = p.readOptions.bind(p);
+              p.readOptions = () => ({{ ...read(), columns: 2 }}); p.renderNow(); }}"""
+        )
+        await settle(page)
+        text = page.locator("#field-text")
+        assert (
+            await text.evaluate("(e) => e.closest('#docked') !== null") and await text.is_visible()
+        )
+        assert await text.input_value() == "один\nдва\nтри\nчетыре"
+        color = await text.evaluate("(e) => getComputedStyle(e).color")
+        assert color not in ("rgba(0, 0, 0, 0)", "transparent"), color
+        assert await page.locator("#field-title").evaluate("(e) => e.closest('.box') !== null")
+        assert await page.evaluate(
+            f"() => getComputedStyle({PANEL}.shadowRoot.querySelector('#field-title')).color"
+        ) in ("rgba(0, 0, 0, 0)", "transparent")
+        assert await page.locator("#chips button").all_inner_texts() == ["+ Подпись снизу"]
+        await assert_overlays_on_blocks(page, ["title"], "columns 2")
+        # Typing in the docked textarea still reaches the strip.
+        before = await page.evaluate(CANVAS_HASH)
+        await text.fill("один\nдва")
+        await settle(page)
+        assert await page.evaluate(CANVAS_HASH) != before
+
+
+async def check_ghost_overlays(p, browser):
+    async with panel(p, browser) as page:
+        assert await page.evaluate(f"() => {PANEL}.lastResult.ghost === true")
+        for key in ("title", "text", "footer"):
+            assert await page.evaluate(PLAN_BLOCK, key), key
+        await assert_overlays_on_blocks(page, ["title", "text", "footer"], "ghost")
+        for key in ("title", "text", "footer"):
+            el = page.locator(f"#field-{key}")
+            assert await el.input_value() == ""
+            assert await el.get_attribute("placeholder")
+            placeholder = await el.evaluate("(e) => getComputedStyle(e, '::placeholder').color")
+            assert placeholder in ("rgba(0, 0, 0, 0)", "transparent"), placeholder
+            assert await el.evaluate("(e) => getComputedStyle(e).pointerEvents") == "auto"
+        await page.locator("#template").select_option("qr_label")
+        await settle(page)
+        example = await page.evaluate(f"() => {PANEL}.templates.qr_label.example.qr")
+        qr = page.locator("#field-qr")
+        assert await qr.get_attribute("placeholder") == example
+        placeholder = await qr.evaluate("(e) => getComputedStyle(e, '::placeholder').color")
+        assert placeholder not in ("rgba(0, 0, 0, 0)", "transparent"), placeholder
+        assert await qr.evaluate("(e) => e.closest('#docked') !== null")
+
+
+async def check_spool_anchors(p, browser):
+    """Spool rows: the overlay starts where the plan's anchor says the value starts (left, centre, right)."""
+    async with panel(p, browser) as page:
+        await page.locator("#template").select_option("spool_label")
+        await fill_text(page, "Катушка", "title")
+        await fill_text(page, "PETG", "material")
+        await fill_text(page, "Чёрный", "color")
+        await fill_text(page, "750 г", "weight")
+        starts = {}
+        for align in ("left", "center", "right"):
+            await page.locator("#align").select_option(align)
+            await settle(page)
+            anchors = await page.evaluate(
+                f"() => {PANEL}.lastResult.blocks.find((b) => b.anchors).anchors"
+            )
+            assert [a["field"] for a in anchors] == ["material", "color", "weight"]
+            for anchor in anchors:
+                want = {
+                    "x": anchor["x"],
+                    "y": anchor["text_y"] + HALF_LEADING,
+                    "w": anchor["w"],
+                    "h": anchor["h"],
+                }
+                await assert_rect(page, anchor["field"], want, align)
+            starts[align] = anchors[0]["x"]
+            # The blank row (nozzle) waits in its slot, where its value would start.
+            slot = await page.evaluate(
+                f"() => {PANEL}.lastResult.slots.find((s) => s.field === 'nozzle')"
+            )
+            await assert_rect(
+                page,
+                "nozzle",
+                {"x": slot["x"], "y": slot["y"] + HALF_LEADING, "w": slot["w"], "h": slot["h"]},
+                f"{align} slot",
+            )
+            assert await page.evaluate(
+                f"() => {PANEL}.shadowRoot.querySelector('#field-nozzle').classList.contains('slot')"
+            )
+        # Not vacuous: the three alignments really start the first value at three different places.
+        assert starts["left"] < starts["center"] < starts["right"], starts
+        order = await page.evaluate(
+            f"() => [...{PANEL}.shadowRoot.querySelectorAll('.overlay')].map((e) => e.id)"
+        )
+        assert order == [
+            "field-title",
+            "field-material",
+            "field-color",
+            "field-weight",
+            "field-nozzle",
+        ], order
+
+
+async def check_composition(p, browser):
+    """An IME composition survives a re-render and reaches the draft only when it ends (Chromium CDP)."""
+    if browser != "chromium":
+        return  # Playwright can only drive a real composition through the Chromium protocol
+    async with panel(p, browser) as page:
+        await fill_text(page, "Верх", "title")
+        await settle(page)
+        await page.locator("#field-text").focus()
+        await page.evaluate(
+            f"""() => {{ window.ime = [];
+              const el = {PANEL}.shadowRoot.querySelector('#field-text');
+              for (const type of ['compositionstart', 'compositionend']) el.addEventListener(type, () => window.ime.push(type)); }}"""
+        )
+        cdp = await page.context.new_cdp_session(page)
+        generation = await page.evaluate(f"() => {PANEL}.scheduler.generation")
+        await cdp.send(
+            "Input.imeSetComposition", {"text": "п", "selectionStart": 1, "selectionEnd": 1}
+        )
+        await page.evaluate(TWO_FRAMES)
+        assert await page.locator("#field-text").input_value() == "п"
+        assert await page.evaluate(f"() => {PANEL}.scheduler.generation") == generation
+        assert await page.evaluate("() => window.ime") == ["compositionstart"]
+        # A render that starts for another reason must not cancel the composition.
+        await page.evaluate(f"() => {PANEL}.renderNow()")
+        await settle(page)
+        await page.evaluate(TWO_FRAMES)
+        assert await page.evaluate(ACTIVE_ID) == "field-text"
+        assert await page.evaluate("() => window.ime") == ["compositionstart"]
+        await cdp.send(
+            "Input.imeSetComposition", {"text": "пр", "selectionStart": 2, "selectionEnd": 2}
+        )
+        assert await page.locator("#field-text").input_value() == "пр"
+        await cdp.send("Input.insertText", {"text": "пр"})
+        await settle(page)
+        assert await page.locator("#field-text").input_value() == "пр"
+        assert "compositionend" in await page.evaluate("() => window.ime")
+        doc = await page.evaluate(f"() => {PANEL}.lastResult.document")
+        assert doc is None or doc["fields"]["text"] == "пр"
+        draft = await page.evaluate(f"() => {PANEL}.getDocument()")
+        assert draft["fields"] == {"title": "Верх", "text": "пр"}, draft
+
+
+async def check_keyboard_and_names(p, browser):
+    async with panel(p, browser) as page:
+        await fill_note(page)
+        captions = await page.evaluate(
+            f"() => [...{PANEL}.shadowRoot.querySelectorAll('.overlay')].map((e) => [e.id, e.getAttribute('aria-label')])"
+        )
+        assert captions == [
+            ["field-title", "Заголовок"],
+            ["field-text", "Текст"],
+            ["field-footer", "Подпись снизу"],
+        ], captions
+        await page.locator("#field-title").focus()
+        order, ys = ["field-title"], []
+        for _ in range(2):
+            await page.keyboard.press("Tab")
+            order.append(await page.evaluate(ACTIVE_ID))
+        assert order == ["field-title", "field-text", "field-footer"], (
+            order
+        )  # Tab walks the strip top down
+        for key in ("title", "text", "footer"):
+            ys.append((await page.evaluate(OVERLAY_RECT, key))["y"])
+        assert ys == sorted(ys), ys
+
+
+async def check_overlay_text_is_not_html(p, browser):
+    async with panel(p, browser) as page:
+        await fill_text(page, '<img src=x onerror="window.pwned=true">', "title")
+        await settle(page)
+        assert await page.locator("#paper img").count() == 0
+        assert await page.evaluate("() => window.pwned === undefined")
+        assert (
+            await page.locator("#field-title").input_value()
+            == '<img src=x onerror="window.pwned=true">'
+        )
+
+
+async def check_single_line_fields_refuse_line_breaks(p, browser):
+    async with panel(p, browser) as page:
+        await fill_text(page, "Раз", "title")
+        await page.locator("#field-title").focus()
+        await page.keyboard.press("End")
+        await page.keyboard.press("Enter")
+        assert await page.locator("#field-title").input_value() == "Раз"
+        await page.locator("#field-text").focus()
+        await page.keyboard.type("а")
+        await page.keyboard.press("Enter")
+        await page.keyboard.type("б")
+        assert await page.locator("#field-text").input_value() == "а\nб"
 
 
 CHECKS = [
@@ -996,6 +1518,33 @@ CHECKS = [
     ("untrusted template content is text, not HTML", check_injection, False),
     ("transport wording: native, bridge, local LE, no printer", check_wording, "shoot"),
     ("mobile 390px has no horizontal overflow; screenshots", check_mobile_and_screens, "shoot+tmp"),
+    ("edit mode table; integer zoom rule", check_edit_mode_table, False),
+    ("overlay geometry equals block geometry at 1x, 2x and 390px", check_overlay_geometry, False),
+    ("zoom is an integer 1x/2x toggle; narrow cards scroll", check_zoom_rule, False),
+    ("overlay uses the renderer's font and the block's alignment", check_overlay_font, False),
+    ("overlay baseline equals the bitmap baseline", check_overlay_baseline, False),
+    ("typing in an overlay updates the strip within a frame", check_typing_updates_strip, False),
+    (
+        "a blank field stays reachable and keeps focus and caret",
+        check_blank_field_keeps_focus,
+        False,
+    ),
+    (
+        "fields without a place on the strip stay editable",
+        check_unplaced_fields_stay_editable,
+        False,
+    ),
+    (
+        "qr and the main text of a multi-column label are docked",
+        check_qr_and_columns_are_docked,
+        False,
+    ),
+    ("ghost state: overlays on ghost blocks, example placeholders", check_ghost_overlays, False),
+    ("spool rows follow the plan anchors (left, centre, right)", check_spool_anchors, False),
+    ("an IME composition survives a re-render", check_composition, False),
+    ("overlays have names and Tab follows the visual order", check_keyboard_and_names, False),
+    ("overlay text is text, not HTML", check_overlay_text_is_not_html, False),
+    ("single-line fields refuse line breaks", check_single_line_fields_refuse_line_breaks, False),
 ]
 
 
