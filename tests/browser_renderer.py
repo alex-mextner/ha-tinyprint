@@ -4,6 +4,7 @@ Run: python tests/browser_renderer.py
 """
 
 import asyncio
+import itertools
 import json
 import random
 import struct
@@ -736,6 +737,514 @@ async def check_slot_kinds(page):
     assert result["nozzle"]["x"] == result["nozzleBlock"]["x"], result
 
 
+# --- Columns 2 and 3 are Studio-only (Python rejects them), so these checks hold invariants. ---
+
+COLUMN_HELPERS = """
+const measureOf = async (doc) => {
+  const face = await faceOf(doc.options);
+  ctx.font = face.css(doc.options.font_size);
+  return (s) => ctx.measureText(s).width * face.scaleX;
+};
+const mainOf = (p) => p.blocks.find((b) => b.field === 'text');
+const textOf = (doc) => doc.fields?.text ?? doc.text;
+const indentOf = (block) => (block.checklist ? 24 : 0);
+const ink = (x0, x1, y0, y1) => {
+  const { data } = ctx.getImageData(x0, y0, x1 - x0, y1 - y0);
+  const xs = [];
+  for (let i = 3; i < data.length; i += 4) if (data[i] > 0) xs.push(x0 + ((i - 3) / 4) % (x1 - x0));
+  return xs.length === 0 ? null : [Math.min(...xs), Math.max(...xs)];
+};
+"""
+
+
+def set_columns(document: dict, columns: int) -> dict:
+    """Python refuses columns != 1, so the option is set after normalizing."""
+    return {**document, "options": {**document["options"], "columns": columns}}
+
+
+def column_doc(
+    columns: int,
+    text: str,
+    *,
+    template: str = "note",
+    font: str = "roboto_flex",
+    size: int = 24,
+    width: int = 100,
+    align: str = "left",
+) -> dict:
+    options = {"font": font, "font_size": size, "font_width": width, "align": align}
+    if template == "text":
+        document = {"kind": "text", "text": text, "options": options}
+    else:
+        fields = {"text": text}
+        if template in ("heading", "storage_label"):
+            fields["title"] = "Заголовок"
+        document = {"kind": "template", "template": template, "fields": fields, "options": options}
+    return set_columns(normalized(document), columns)
+
+
+COLUMN_TEXTS = [
+    "Короткая строка\nВторая строка немного длиннее первой\nТретья",
+    "Unbroken " + "W" * 16 + " tail and more words to wrap across lines",
+    "ПриветмирПриветмирПриветмирПриветмирПриветмир\nа б в г д е ж з и к",
+]
+COLUMN_TEMPLATES = ["note", "checklist", "heading", "storage_label", "text"]
+COLUMN_FACES = [("roboto_flex", size) for size in (12, 24, 48)] + [
+    ("tiny5", size) for size in (8, 24, 48)
+]
+
+
+async def check_columns_geometry(page):
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const out = {};
+        for (const doc of args.docs) {
+          const p = await plan(doc);
+          const block = mainOf(p);
+          out[doc.options.columns] = {
+            w: block.columns.map((c) => c.w),
+            x: block.columns.map((c) => c.x),
+            tallest: Math.max(...block.columns.map((c) => c.lines.length)),
+            h: block.h,
+            step: block.step,
+            box: [block.x, block.w, block.text_y - block.y],
+            rows: p.rows,
+          };
+        }
+        return out;
+        """,
+        docs=[column_doc(n, "\n".join(f"строка {i}" for i in range(7)), size=12) for n in (2, 3)],
+    )
+    assert result["2"]["w"] == [178, 178] and result["2"]["x"] == [10, 196], result
+    assert result["3"]["w"] == [116] * 3 and result["3"]["x"] == [10, 134, 258], result
+    for n, tallest_lines in (("2", 4), ("3", 3)):
+        got = result[n]
+        assert got["tallest"] == tallest_lines, got
+        assert got["h"] == tallest_lines * got["step"] + 16, got
+        assert got["box"] == [10, 364, 8] and got["rows"] == got["h"] + 16, got
+
+
+async def check_columns_no_line_too_wide(page):
+    docs = [
+        column_doc(n, text, template=template, font=font, size=size)
+        for font, size in COLUMN_FACES
+        for template in COLUMN_TEMPLATES
+        for n in (2, 3)
+        for text in COLUMN_TEXTS
+    ]
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const bad = [];
+        let lines = 0;
+        for (const doc of args.docs) {
+          const block = mainOf(await plan(doc));
+          const measure = await measureOf(doc);
+          const tag = `${doc.options.font}/${doc.options.font_size}/${doc.options.columns}/${block.checklist}`;
+          for (const col of block.columns) {
+            const limit = col.w - indentOf(block);
+            col.lines.forEach((line, i) => {
+              lines += 1;
+              // The wrap always cuts at least one code point, so a lone glyph may exceed the column.
+              const lone = Array.from(line).length === 1;
+              if (col.widths[i] !== measure(line)) bad.push(`${tag}: width ${i} is not the advance width`);
+              if (col.widths[i] > limit && !lone) bad.push(`${tag}: ${JSON.stringify(line)} is ${col.widths[i]} > ${limit}`);
+            });
+          }
+        }
+        return { bad, lines };
+        """,
+        docs=docs,
+    )
+    assert result["lines"] > 1000 and not result["bad"], result["bad"][:5]
+
+
+async def check_columns_extreme_glyphs(page):
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const out = [];
+        for (const doc of args.docs) {
+          const block = mainOf(await plan(doc));
+          const lines = block.columns.flatMap((c) => c.lines);
+          out.push({
+            counts: lines.map((line) => Array.from(line).length),
+            joined: lines.join(''),
+            checklist: block.checklist,
+            over: block.columns.some((c) => c.widths.some((w) => w > c.w - indentOf(block))),
+          });
+        }
+        return out;
+        """,
+        docs=[
+            column_doc(3, "WWWW MMMM\nWWW", size=96, width=151),
+            column_doc(3, "WWWW MMMM\nWWW", template="checklist", size=96, width=151),
+        ],
+    )
+    for case in result:
+        assert set(case["counts"]) == {1}, case
+        # A glyph is 93-96 wide: it fits a 116 column but overflows the 92 left beside a checkbox.
+        assert case["joined"] == "WWWWMMMMWWW" and case["over"] == case["checklist"], case
+
+
+def brute_partitions(items: list[int], n: int):
+    """Every contiguous split of `items` into `n` (possibly empty) groups."""
+    for cuts in itertools.combinations_with_replacement(range(len(items) + 1), n - 1):
+        bounds = (0, *cuts, len(items))
+        yield [items[bounds[i] : bounds[i + 1]] for i in range(n)]
+
+
+def brute_flow(items: list[int], n: int) -> list[list[int]]:
+    """Minimal tallest column; among those the largest line counts read left to right."""
+
+    def key(partition):
+        sums = [sum(column) for column in partition]
+        return (max(sums), [-s for s in sums])
+
+    return min(brute_partitions(items, n), key=key)
+
+
+def tallest(partition: list[list[int]]) -> int:
+    return max(sum(column) for column in partition)
+
+
+async def check_columns_tallest_minimal(page):
+    docs = [
+        column_doc(n, text, template=template, size=size)
+        for n in (2, 3)
+        for template, text, size in [
+            ("note", "\n".join("слово " * (1 + i % 4) for i in range(11)), 24),
+            ("checklist", "\n".join("слово " * (1 + (i * 7) % 9) + str(i) for i in range(9)), 24),
+            ("checklist", "ПриветмирПриветмирПриветмирПривет\nа\nб\nв\nдлинный пункт\n" * 2, 12),
+            ("text", "один два три четыре пять шесть семь восемь девять десять " * 3, 36),
+        ]
+    ]
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const out = [];
+        for (const doc of args.docs) {
+          const block = mainOf(await plan(doc));
+          out.push({ n: doc.options.columns, items: block.columns.map((c) => c.items) });
+        }
+        return out;
+        """,
+        docs=docs,
+    )
+    for case in result:
+        flat = [count for column in case["items"] for count in column]
+        assert len(case["items"]) == case["n"] and len(flat) > case["n"], case
+        best = min(tallest(p) for p in brute_partitions(flat, case["n"]))
+        assert tallest(case["items"]) == best, (case, best)
+    # flowColumns on many seeded item lists, brute-forced.
+    rng = random.Random(3)
+    lists = [[rng.randint(1, 7) for _ in range(rng.randint(0, 11))] for _ in range(250)]
+    flowed = await run_layout(
+        page,
+        "return args.lists.flatMap((items) => [2, 3].map((n) => layout.flowColumns(items, n)));",
+        lists=lists,
+    )
+    cases = [(items, n) for items in lists for n in (2, 3)]
+    assert len(flowed) == len(cases)
+    for (items, n), got in zip(cases, flowed, strict=True):
+        assert tallest(got) == tallest(brute_flow(items, n)), (items, n, got)
+
+
+async def check_columns_ties(page):
+    cases = [
+        ([1, 1, 1, 1], 3),
+        ([1, 1, 1, 1, 1], 3),
+        ([1, 1], 3),
+        ([1], 3),
+        ([2, 1, 1, 2], 2),
+        ([3, 1, 1, 1, 1, 1], 3),
+        ([2, 2, 1, 1, 1], 3),
+        ([], 3),
+    ]
+    flowed = await run_layout(
+        page, "return args.cases.map(([items, n]) => layout.flowColumns(items, n));", cases=cases
+    )
+    for (items, n), got in zip(cases, flowed, strict=True):
+        assert got == brute_flow(items, n), (items, n, got)
+    assert flowed[0] == [[1, 1], [1, 1], []], flowed[0]
+    # The same rule seen through a plan: four one-line items in three columns.
+    plan_items = await run_layout(
+        page,
+        COLUMN_HELPERS + "return mainOf(await plan(args.doc)).columns.map((c) => c.items);",
+        doc=column_doc(3, "а\nб\nв\nг"),
+    )
+    assert plan_items == [[1, 1], [1, 1], []], plan_items
+
+
+async def check_columns_reading_order(page):
+    checklist_text = "\n".join(
+        ["Высушить пластик и очистить стол перед печатью", "Короткий", "", "Ещё"] * 3
+    )
+    docs = [
+        column_doc(n, text, template=template, size=size)
+        for n in (2, 3)
+        for template, text, size in [
+            ("note", COLUMN_TEXTS[0] + "\n" + COLUMN_TEXTS[1], 24),
+            ("checklist", checklist_text, 24),
+            ("checklist", checklist_text, 12),
+        ]
+    ]
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const out = [];
+        for (const doc of args.docs) {
+          const block = mainOf(await plan(doc));
+          const measure = await measureOf(doc);
+          const width = block.columns[0].w - indentOf(block);
+          const wrapped = layout.wrapText(measure, textOf(doc), width, { checklist: block.checklist });
+          const expectedItems = [];
+          for (const line of wrapped) {
+            if (block.checklist && !line.head) expectedItems[expectedItems.length - 1] += 1;
+            else expectedItems.push(1);
+          }
+          out.push({
+            checklist: block.checklist,
+            lines: block.columns.flatMap((c) => c.lines),
+            expectedLines: wrapped.map((l) => l.text),
+            blockLines: block.lines,
+            checks: block.columns.flatMap((c) => c.checks),
+            expectedChecks: wrapped.map((l) => l.check),
+            items: block.columns.flatMap((c) => c.items),
+            expectedItems,
+            sums: block.columns.map((c) => [c.items.reduce((a, b) => a + b, 0), c.lines.length, c.widths.length]),
+            paragraphs: textOf(doc).split('\\n').length,
+          });
+        }
+        return out;
+        """,
+        docs=docs,
+    )
+    for case in result:
+        assert case["lines"] == case["expectedLines"] == case["blockLines"], case
+        assert case["checks"] == case["expectedChecks"], case
+        assert case["items"] == case["expectedItems"], case
+        assert all(a == b == c for a, b, c in case["sums"]), case
+        if case["checklist"]:
+            assert len(case["items"]) == case["paragraphs"], case
+            assert max(case["items"]) > 1, case  # an item wraps, so atomicity is exercised
+        else:
+            assert set(case["items"]) == {1}, case
+
+
+async def check_columns_full_width_blocks(page):
+    storage = normalized(
+        {
+            "kind": "template",
+            "template": "storage_label",
+            "fields": {
+                "title": "Заголовок",
+                "location": "Полка 3",
+                "text": "Строка один\nСтрока два\nСтрока три\nСтрока четыре",
+                "qr": "https://example.com",
+            },
+            "options": {"align": "right"},
+        }
+    )
+    short = normalized(
+        {
+            "kind": "template",
+            "template": "note",
+            "fields": {"title": "Т", "text": "коротко", "footer": "Подвал"},
+        }
+    )
+    qr = normalized({"kind": "qr", "text": "https://example.com"})
+    result = await run_layout(
+        page,
+        """
+        const strip = (b) => { const { face, columns, ...rest } = b; return rest; };
+        const out = {};
+        for (const [name, doc] of Object.entries(args.docs)) {
+          const one = await plan(doc.one, 21);
+          const many = await plan(doc.many, 21);
+          out[name] = {
+            fields: many.blocks.map((b) => b.field),
+            // Every block except the main text (its height may differ) is identical up to y.
+            sameFullWidth: many.blocks.every((b, i) => b.field === 'text'
+              || JSON.stringify({ ...strip(b), y: 0, text_y: 0 }) === JSON.stringify({ ...strip(one.blocks[i]), y: 0, text_y: 0 })),
+            exact: JSON.stringify(many.blocks.map(strip)) === JSON.stringify(one.blocks.map(strip)),
+            rowsDelta: many.rows - one.rows,
+          };
+        }
+        return out;
+        """,
+        docs={
+            "storage": {"one": set_columns(storage, 1), "many": set_columns(storage, 3)},
+            "short": {"one": set_columns(short, 1), "many": set_columns(short, 3)},
+            "qr": {"one": set_columns(qr, 1), "many": set_columns(qr, 3)},
+        },
+    )
+    assert all(case["sameFullWidth"] for case in result.values()), result
+    assert result["storage"]["fields"] == ["title", "location", "text", "qr"], result
+    assert result["storage"]["rowsDelta"] < 0, result  # the text is shorter in three columns
+    # One short line is one row either way: the whole plan, y included, is unchanged.
+    assert result["short"]["exact"] and result["qr"]["exact"], result
+
+
+async def check_columns_checklist_indent(page):
+    text = "\n".join(["Высушить пластик перед печатью и очистить стол", "Один", "Два", "Три"] * 2)
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const read = (x, y) => ctx.getImageData(x, y, 1, 1).data[3];
+        const out = {};
+        for (const doc of args.docs) {
+          const p = await plan(doc);
+          const block = mainOf(p);
+          const measure = await measureOf(doc);
+          ctx.clearRect(0, 0, 384, 2048);
+          layout.drawPlan(ctx, p);
+          const n = doc.options.columns;
+          const xs = n > 1 ? block.columns.map((c) => c.x) : [10];
+          const y = block.text_y;
+          out[n] = {
+            box: [block.x, block.w],
+            xs,
+            lines: n > 1 ? block.columns.flatMap((c) => c.lines) : block.lines,
+            expected: layout.wrapText(measure, textOf(doc), n > 1 ? 154 : 340, { checklist: true }).map((l) => l.text),
+            boxes: xs.map((x) => {
+              const column = (from, to) => {
+                let most = 0;
+                for (let gx = x + from; gx < x + to; gx += 1) for (let gy = y; gy < y + block.step; gy += 1) most = Math.max(most, read(gx, gy));
+                return most;
+              };
+              return { corners: [read(x, y + 7), read(x + 14, y + 21)], gap: column(16, 24), text: column(24, 44) };
+            }),
+          };
+        }
+        return out;
+        """,
+        docs=[column_doc(n, text, template="checklist") for n in (1, 2)],
+    )
+    one, two = result["1"], result["2"]
+    assert one["box"] == [34, 340] and one["xs"] == [10], one
+    assert two["xs"] == [10, 196], two
+    for case in (one, two):
+        assert case["lines"] == case["expected"] and len(case["lines"]) > 4, case
+        for box in case["boxes"]:
+            assert box["corners"] == [255, 255] and box["gap"] == 0 and box["text"] > 0, case
+
+
+async def check_columns_short_text(page):
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const block = mainOf(await plan(args.doc));
+        return {
+          lines: block.columns.map((c) => c.lines),
+          items: block.columns.map((c) => c.items),
+          x: block.columns.map((c) => c.x),
+          h: block.h - block.step,
+        };
+        """,
+        doc=column_doc(3, "один"),
+    )
+    assert result["lines"] == [["один"], [], []], result
+    assert result["items"] == [[1], [], []] and result["x"] == [10, 134, 258], result
+    assert result["h"] == 16, result
+
+
+async def check_columns_one_is_golden(page):
+    assert all(case["document"]["options"]["columns"] == 1 for case in CASES)
+    cases = [c for c in CASES if not c["near_edge"] and c["name"] not in ASTRAL_WRAP_CASES]
+    bad = await run_layout(page, GOLDEN_BODY, cases=cases, near_edge=False)
+    assert not bad, bad[:8]
+    columned = await run_layout(
+        page,
+        """
+        let seen = 0;
+        for (const c of args.cases) {
+          const p = await plan(c.document, modulesOf(c));
+          seen += p.blocks.filter((b) => 'columns' in b).length;
+        }
+        return seen;
+        """,
+        cases=cases,
+    )
+    assert columned == 0, columned
+
+
+async def check_columns_alignment_and_gutter(page):
+    aligned = [column_doc(2, "HI\nHI", align=align) for align in ("left", "center", "right")]
+    packed = column_doc(3, "\n".join(["WWWW WWWW WWWW"] * 6))
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const out = { aligned: [], gutters: [] };
+        for (const doc of args.aligned) {
+          const p = await plan(doc);
+          const block = mainOf(p);
+          ctx.clearRect(0, 0, 384, 2048);
+          layout.drawPlan(ctx, p);
+          for (const col of block.columns) {
+            const w = col.widths[0];
+            const start = { left: col.x, center: col.x + Math.round((col.w - w) / 2), right: col.x + col.w - Math.round(w) }[doc.options.align];
+            out.aligned.push({ align: doc.options.align, start, col: [col.x, col.w], ink: ink(col.x, col.x + col.w + 4, block.text_y, block.text_y + block.step) });
+          }
+        }
+        const p = await plan(args.packed);
+        const block = mainOf(p);
+        ctx.clearRect(0, 0, 384, 2048);
+        layout.drawPlan(ctx, p);
+        const tallest = Math.max(...block.columns.map((c) => c.lines.length));
+        block.columns.forEach((col, i) => {
+          const next = block.columns[i + 1];
+          out.gutters.push({
+            ink: ink(col.x, col.x + col.w + 1, block.text_y, block.text_y + tallest * block.step),
+            gutter: next ? ink(col.x + col.w + 2, next.x - 2, block.text_y, block.text_y + tallest * block.step) : null,
+            beyond: next ? null : ink(col.x + col.w + 2, 384, block.text_y, block.text_y + tallest * block.step),
+          });
+        });
+        return out;
+        """,
+        aligned=aligned,
+        packed=packed,
+    )
+    assert len(result["aligned"]) == 6, result
+    for item in result["aligned"]:
+        x, w = item["col"]
+        left, right = item["ink"]
+        assert abs(left - item["start"]) <= 4 and x <= left and right <= x + w + 2, item
+    starts = {item["align"]: item["start"] - item["col"][0] for item in result["aligned"]}
+    assert starts["left"] == 0 < starts["center"] < starts["right"], starts
+    assert all(g["ink"] is not None and g["gutter"] is None for g in result["gutters"]), result
+    assert result["gutters"][2]["beyond"] is None, result
+
+
+async def check_columns_blank_slot(page):
+    heading = normalized(
+        {"kind": "template", "template": "heading", "fields": {"title": "Заголовок"}}
+    )
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const slot = (await plan(args.blank)).slots.find((s) => s.field === 'text');
+        const block = mainOf(await plan(args.filled));
+        return { slot, y: block.text_y, column: [block.columns[0].x, block.columns[0].w] };
+        """,
+        blank=set_columns(heading, 2),
+        filled=set_columns({**heading, "fields": {**heading["fields"], "text": "x"}}, 2),
+    )
+    slot = result["slot"]
+    assert [slot["x"], slot["w"]] == result["column"] == [10, 178], result
+    assert slot["y"] == result["y"], result
+
+
 CHECKS = [
     ("pack: bit order and alpha threshold", check_pack_bits),
     ("pack: bytesToBase64 round-trips 98,304 bytes without a RangeError", check_base64),
@@ -774,6 +1283,30 @@ CHECKS = [
         check_spool_anchor_heuristic,
     ),
     ("layout: slots exist for QR and spool rows, never for plain documents", check_slot_kinds),
+    ("columns: widths and positions", check_columns_geometry),
+    ("columns: no line is wider than its column", check_columns_no_line_too_wide),
+    (
+        "columns: one glyph per line when two glyphs do not fit a column",
+        check_columns_extreme_glyphs,
+    ),
+    ("columns: tallest column is minimal", check_columns_tallest_minimal),
+    ("columns: ties pick the lexicographically largest partition", check_columns_ties),
+    (
+        "columns: reading order preserved and checklist items atomic",
+        check_columns_reading_order,
+    ),
+    ("columns: full-width blocks are unchanged", check_columns_full_width_blocks),
+    ("columns: checklist indent is 24 relative to the column edge", check_columns_checklist_indent),
+    (
+        "columns: a single short line with 3 columns yields one non-empty column",
+        check_columns_short_text,
+    ),
+    ("columns: 1 equals the golden fixture", check_columns_one_is_golden),
+    (
+        "columns: alignment is relative to the column and the gutters stay clear",
+        check_columns_alignment_and_gutter,
+    ),
+    ("columns: a blank main text slot sits in the first column", check_columns_blank_slot),
 ]
 
 

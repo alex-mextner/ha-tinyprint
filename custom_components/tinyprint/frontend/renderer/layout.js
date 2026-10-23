@@ -12,6 +12,9 @@ const CHECKBOX = { x0: 10, x1: 24, top: 7, bottom: 21 }; // PIL rectangle inside
 const WRAP_PROBE_LIMIT = 512; // Python never measures more than this many code points at once
 const SPOOL_NAMES = { material: 'Материал', color: 'Цвет', weight: 'Остаток', nozzle: 'Сопло' };
 const QR_LEVELS = new Set(['M', 'Q', 'H']);
+const GUTTER = 8; // space between newspaper columns (advance width; ink may overhang by ~1 px)
+const CHECK_INDENT = CHECK_INSET - MARGIN; // checklist text starts this far after its column edge
+const COLUMN_COUNTS = new Set([1, 2, 3]);
 
 /** Python's `round()`: ties go to the even neighbour (JS `Math.round` rounds them up). */
 export function pyRound(value) {
@@ -57,7 +60,8 @@ function expandTabs(text) {
 /**
  * `_wrap` of the Python renderer: greedy cut by binary search on code points, backing off to
  * the last space. A line always keeps at least one code point. No row cap (`planLabel` checks).
- * @returns {{ text: string, check: boolean }[]}
+ * @returns {{ text: string, check: boolean, head: boolean }[]} `head` marks the first line of a
+ *   paragraph (the empty paragraph's one blank line included), `check` the checklist ones
  */
 export function wrapText(measure, text, maxWidth, { checklist = false } = {}) {
   const lines = [];
@@ -80,12 +84,12 @@ export function wrapText(measure, text, maxWidth, { checklist = false } = {}) {
         const split = window.lastIndexOf(' ', cut);
         if (split > 0) cut = split;
       }
-      lines.push({ text: window.slice(0, cut).join(''), check: checklist && first });
+      lines.push({ text: window.slice(0, cut).join(''), check: checklist && first, head: first });
       first = false;
       start += cut;
       while (start < chars.length && chars[start] === ' ') start += 1;
     }
-    if (first) lines.push({ text: '', check: false });
+    if (first) lines.push({ text: '', check: false, head: true });
   }
   return lines;
 }
@@ -105,15 +109,97 @@ function drawX(block, width) {
   return Math.max(inset, WIDTH - MARGIN - pyRound(width));
 }
 
-function textPart(field, text, size, align, checklist, face, ctx) {
+// Start of a line inside a newspaper column. Checklist text ignores `align` like the single
+// column; a line wider than its column (a lone oversized glyph) never starts left of it.
+function columnX(block, column, width) {
+  if (block.checklist) return column.x + CHECK_INDENT;
+  if (block.align === 'left') return column.x;
+  if (block.align === 'center') return column.x + Math.max(0, pyRound((column.w - width) / 2));
+  return column.x + Math.max(0, column.w - pyRound(width));
+}
+
+/**
+ * Splits the line counts of `items` into `n` contiguous columns with the smallest tallest column.
+ * Among equal tallest columns the line counts read left to right are lexicographically largest
+ * (earlier columns fill first), which is what filling each column up to the minimal limit gives.
+ * @param {number[]} items line count of every unbreakable item
+ * @returns {number[][]} `n` columns, each the item line counts it holds (a column may be empty)
+ */
+export function flowColumns(items, n) {
+  const fits = (limit) => {
+    let used = 1;
+    let height = 0;
+    for (const count of items) {
+      if (count > limit) return false;
+      if (height + count > limit) {
+        used += 1;
+        height = 0;
+      }
+      height += count;
+    }
+    return used <= n;
+  };
+  let low = items.reduce((most, count) => Math.max(most, count), 0);
+  let high = items.reduce((sum, count) => sum + count, 0);
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (fits(middle)) high = middle;
+    else low = middle + 1;
+  }
+  const columns = Array.from({ length: n }, () => []);
+  let column = 0;
+  let height = 0;
+  for (const count of items) {
+    if (height + count > low) {
+      column += 1;
+      height = 0;
+    }
+    columns[column].push(count);
+    height += count;
+  }
+  return columns;
+}
+
+const columnWidth = (count) => Math.floor((WIDTH - 2 * MARGIN - GUTTER * (count - 1)) / count);
+
+// The wrapped lines of the main text laid out as newspaper columns: items are lines, except in a
+// checklist where one paragraph (all its wrapped lines) is one item and never splits.
+function newspaperColumns(wrapped, widths, checklist, count) {
+  const colW = columnWidth(count);
+  const items = [];
+  for (const line of wrapped) {
+    if (checklist && !line.head) items[items.length - 1] += 1;
+    else items.push(1);
+  }
+  let first = 0;
+  return flowColumns(items, count).map((group, i) => {
+    const lines = group.reduce((sum, itemLines) => sum + itemLines, 0);
+    const column = {
+      x: MARGIN + i * (colW + GUTTER),
+      w: colW,
+      lines: wrapped.slice(first, first + lines).map((line) => line.text),
+      checks: wrapped.slice(first, first + lines).map((line) => line.check),
+      widths: widths.slice(first, first + lines),
+      items: group,
+    };
+    first += lines;
+    return column;
+  });
+}
+
+function textPart(field, text, size, align, checklist, face, ctx, columns = 1) {
   const ascent = face.ascent(size);
   const descent = face.descent(size);
   const step = ascent + descent + 5;
   const inset = checklist ? CHECK_INSET : MARGIN;
   ctx.font = face.css(size);
   const measure = (s) => ctx.measureText(s).width * face.scaleX;
-  const wrapped = wrapText(measure, text, WIDTH - inset - MARGIN, { checklist });
-  return {
+  // The wrap width of a newspaper column is its width less the checklist's checkbox indent.
+  const colW = columnWidth(columns);
+  const wrapWidth = columns === 1 ? WIDTH - inset - MARGIN : colW - (checklist ? CHECK_INDENT : 0);
+  const wrapped = wrapText(measure, text, wrapWidth, { checklist });
+  const widths = wrapped.map((line) => measure(line.text));
+  const part = {
     field,
     kind: 'text',
     x: inset,
@@ -125,11 +211,20 @@ function textPart(field, text, size, align, checklist, face, ctx) {
     descent,
     lines: wrapped.map((line) => line.text),
     checks: wrapped.map((line) => line.check),
-    widths: wrapped.map((line) => measure(line.text)),
+    widths,
     align: checklist ? 'left' : align,
     checklist,
     face,
   };
+  if (columns > 1) {
+    // The block spans the full usable width; `columns` hold what each column draws.
+    part.x = MARGIN;
+    part.w = WIDTH - 2 * MARGIN;
+    part.columns = newspaperColumns(wrapped, widths, checklist, columns);
+    const tallest = Math.max(...part.columns.map((column) => column.lines.length));
+    part.h = Math.max(1, tallest) * step + 2 * PAD;
+  }
+  return part;
 }
 
 // Where each `Name: value` row's value starts: the first line holding more ink characters
@@ -221,11 +316,16 @@ function documentParts(document, face, ctx, templates, qrModules) {
     throw new RenderError('bad_document', 'document needs complete options');
   }
   const size = options.font_size;
-  const text = (field, value, fieldSize, align, checklist = false) =>
-    textPart(field, value, fieldSize, align, checklist, face, ctx);
+  const columns = options.columns ?? 1;
+  if (!COLUMN_COUNTS.has(columns)) {
+    throw new RenderError('bad_document', 'columns must be 1, 2 or 3');
+  }
+  // `columns` flows only the main text; title, location, spool rows, QR and footer stay full width.
+  const text = (field, value, fieldSize, align, checklist = false, flow = 1) =>
+    textPart(field, value, fieldSize, align, checklist, face, ctx, flow);
   if (document.kind === 'qr') return [qrPart('qr', document.text, options, qrModules)];
   if (document.kind === 'text') {
-    return [text('text', document.text, size, options.align)];
+    return [text('text', document.text, size, options.align, false, columns)];
   }
   if (document.kind !== 'template') {
     throw new RenderError('bad_document', `unsupported document kind ${document.kind}`);
@@ -253,7 +353,7 @@ function documentParts(document, face, ctx, templates, qrModules) {
   }
   if (fields.text) {
     const checklist = document.template === 'checklist';
-    parts.push(text('text', fields.text, size, options.align, checklist));
+    parts.push(text('text', fields.text, size, options.align, checklist, columns));
   }
   if (fields.qr) parts.push(qrPart('qr', fields.qr, options, qrModules));
   if (fields.footer) {
@@ -288,6 +388,12 @@ function placeParts(parts, border) {
 function slotOf(blocks, field) {
   for (const block of blocks) {
     if (block.field === field) {
+      if (block.columns) {
+        // The first line of the main text starts in the first column.
+        const [first] = block.columns;
+        const indent = block.checklist ? CHECK_INDENT : 0;
+        return { field, x: first.x + indent, y: block.text_y, w: first.w - indent, h: block.step };
+      }
       const h = block.kind === 'qr' ? block.h : block.step;
       return { field, x: block.x, y: block.text_y, w: block.w, h };
     }
@@ -357,22 +463,32 @@ export function drawPlan(ctx, plan) {
     if (block.kind !== 'text') continue;
     const { face } = block;
     ctx.font = face.css(block.size);
-    block.lines.forEach((line, i) => {
-      const y = block.text_y + i * block.step;
-      if (block.checks[i]) {
-        frame(ctx, CHECKBOX.x0, y + CHECKBOX.top, CHECKBOX.x1, y + CHECKBOX.bottom);
-      }
-      if (line === '') return;
-      const x = drawX(block, block.widths[i]);
-      if (face.scaleX === 1) {
-        ctx.fillText(line, x, y + block.ascent);
-      } else {
-        ctx.save();
-        ctx.scale(face.scaleX, 1);
-        ctx.fillText(line, x / face.scaleX, y + block.ascent);
-        ctx.restore();
-      }
-    });
+    const groups = block.columns
+      ? block.columns.map((column) => ({
+          ...column,
+          box: column.x,
+          startX: (width) => columnX(block, column, width),
+        }))
+      : [{ ...block, box: CHECKBOX.x0, startX: (width) => drawX(block, width) }];
+    for (const group of groups) {
+      group.lines.forEach((line, i) => {
+        const y = block.text_y + i * block.step;
+        if (group.checks[i]) {
+          const x0 = group.box;
+          frame(ctx, x0, y + CHECKBOX.top, x0 + CHECKBOX.x1 - CHECKBOX.x0, y + CHECKBOX.bottom);
+        }
+        if (line === '') return;
+        const x = group.startX(group.widths[i]);
+        if (face.scaleX === 1) {
+          ctx.fillText(line, x, y + block.ascent);
+        } else {
+          ctx.save();
+          ctx.scale(face.scaleX, 1);
+          ctx.fillText(line, x / face.scaleX, y + block.ascent);
+          ctx.restore();
+        }
+      });
+    }
   }
   if (plan.border) frame(ctx, 2, 2, WIDTH - 3, plan.rows - 3);
   ctx.restore();
