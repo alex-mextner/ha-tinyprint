@@ -233,6 +233,7 @@ export class Renderer {
   #measure = null;
   #surface = null;
   #pixels = null;
+  #disposed = false;
   #isolated = 0; // > 0 while selfTest runs: its renders never touch a buffer someone may hold
 
   /** @param {{ baseUrl: URL, fonts: object, templates: object }} config */
@@ -245,7 +246,9 @@ export class Renderer {
   async #withLiveFace(options, use) {
     const entry = this.#tables.fonts[options.font];
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (this.#disposed) throw new RenderError('font_load_failed', 'renderer was disposed');
       const face = await this.#registry.face(options.font, entry, options.font_width, options.font_weight);
+      if (this.#disposed) throw new RenderError('font_load_failed', 'renderer was disposed');
       if (isLive(face)) return use(face);
     }
     throw new RenderError('font_load_failed', `font ${options.font} is not registered in the page`);
@@ -294,6 +297,7 @@ export class Renderer {
 
   /** @returns {Promise<object>} rejects only with `RenderError` */
   async render(input) {
+    if (this.#disposed) throw new RenderError('font_load_failed', 'renderer was disposed');
     try {
       return await this.#render(input);
     } catch (error) {
@@ -469,6 +473,7 @@ export class Renderer {
   }
 
   dispose() {
+    this.#disposed = true;
     this.#registry.dispose();
     this.#measure = null;
     this.#surface = null;

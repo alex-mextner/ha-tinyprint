@@ -2366,14 +2366,49 @@ async def check_renderer_self_test_keeps_results(page):
     result = await run_renderer(
         page,
         """
-        const held = await go(args.note);
+        // Same row count as the self-test label but other ink: reuse would overwrite it.
+        const probe = await go({ kind: 'text', text: args.selftext, options: {} });
+        const held = await go({ kind: 'text', text: 'ЫЫЫЫЫЫ', options: {} });
         const shot = Array.from(held.pixels.data);
         const report = await renderer.selfTest();
-        return { ok: report.ok, kept: same(shot, held.pixels.data) };
+        return { ok: report.ok, kept: same(shot, held.pixels.data), rows: held.rows === probe.rows };
         """,
-        note=NOTE,
+        selftext="Привет, мир 0123 Wxyz",
     )
-    assert result == {"ok": True, "kept": True}, result
+    assert result == {"ok": True, "kept": True, "rows": True}, result
+
+
+async def check_renderer_dispose_in_flight(page):
+    """A render still loading its face when dispose() runs fails and leaves no FontFace behind."""
+    result = await run_renderer(
+        page,
+        """
+        const pending = code(() => go(opt({ font_width: 91 })));
+        renderer.dispose();
+        const failure = await pending;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const left = [...document.fonts].filter((f) => f.family.replaceAll('"', '').startsWith('tp-')).length;
+        return { failure, left };
+        """,
+    )
+    assert result == {"failure": "font_load_failed", "left": 0}, result
+    after = await run_renderer(
+        page,
+        """
+        renderer.dispose();
+        const text = await code(() => go(opt({ font_width: 92 })));
+        const qr = await code(() => go({ kind: 'qr', text: 'x', options: {} }));
+        const face = await code(() => renderer.faceFor({ font_width: 93 }));
+        const left = [...document.fonts].filter((f) => f.family.replaceAll('"', '').startsWith('tp-')).length;
+        return { text, qr, face, left };
+        """,
+    )
+    assert after == {
+        "text": "font_load_failed",
+        "qr": "font_load_failed",
+        "face": "font_load_failed",
+        "left": 0,
+    }, after
 
 
 async def check_renderer_face_for(page):
@@ -2693,6 +2728,7 @@ CHECKS = [
         check_renderer_pixels_reuse,
     ),
     ("renderer: selfTest leaves a held result untouched", check_renderer_self_test_keeps_results),
+    ("renderer: dispose during a render leaves no FontFace", check_renderer_dispose_in_flight),
     ("renderer: faceFor shares the family and size of the render", check_renderer_face_for),
     (
         "renderer: every option range, enum and font constraint is validated",
