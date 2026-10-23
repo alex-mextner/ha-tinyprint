@@ -556,12 +556,9 @@ async def check_in_flight_list_from_server(p, browser):
 async def check_overlapping_renders(p, browser):
     async with panel(p, browser, settle=False, font_delay_ms=300) as page:
         await page.wait_for_function(f"() => {PANEL}.loaded")
-        # The panel has no weight control yet: the options hook stands in for it.
-        await page.evaluate(
-            f"""() => {{ const p = {PANEL}; const read = p.readOptions.bind(p); window.weight = 900; p.readOptions = () => ({{ ...read(), font_weight: window.weight }}); }}"""
-        )
+        await set_range(page, "font_weight", 900)
         await fill_text(page, "Первый")
-        await page.evaluate("() => { window.weight = 800; }")
+        await set_range(page, "font_weight", 800)
         await fill_text(page, "Второй")
         await settle(page)
         assert await page.evaluate(
@@ -1192,6 +1189,18 @@ async def check_overlay_baseline(p, browser):
         assert block["lines"] > 1 and block["size"] >= 60, block  # a wrapped heading
         drawn, typed = await baseline_shift(page, "title", shot)
         assert abs(drawn[0] - typed[0]) <= 1 and abs(drawn[1] - typed[1]) <= 1, (drawn, typed)
+        # The largest size: a wrapping heading at 96 px. The overflow:hidden textarea must wrap
+        # exactly like the renderer, or the caret would leave the drawn line (measured, not assumed).
+        await page.locator("#font_size").fill("96")
+        await settle(page)
+        block = await page.evaluate(PLAN_BLOCK, "title")
+        assert block["lines"] > 1 and block["size"] == 96, block
+        drawn, typed = await baseline_shift(page, "title", shot)
+        assert abs(drawn[0] - typed[0]) <= 1 and abs(drawn[1] - typed[1]) <= 1, (drawn, typed)
+        fit = await page.evaluate(
+            f"""() => {{ const e = {PANEL}.shadowRoot.querySelector('#field-title'); return [e.scrollHeight, e.clientHeight]; }}"""
+        )
+        assert fit[0] == fit[1] == block["lines"] * block["step"], (fit, block)
     shot.unlink(missing_ok=True)
 
 
@@ -1372,10 +1381,7 @@ async def check_qr_and_columns_are_docked(p, browser):
         await fill_text(page, "Верх", "title")
         await fill_text(page, "один\nдва\nтри\nчетыре", "text")
         await settle(page)
-        await page.evaluate(
-            f"""() => {{ const p = {PANEL}; const read = p.readOptions.bind(p);
-              p.readOptions = () => ({{ ...read(), columns: 2 }}); p.renderNow(); }}"""
-        )
+        await page.locator("#columns").select_option("2")
         await settle(page)
         text = page.locator("#field-text")
         assert (
@@ -1567,6 +1573,287 @@ async def check_single_line_fields_refuse_line_breaks(p, browser):
         assert await page.locator("#field-text").input_value() == "а\nб"
 
 
+async def set_range(page, key, value, events=("input", "change")):
+    """Set a slider the way the user's final value looks, firing only the events asked for."""
+    await page.locator(f"#{key}").evaluate(
+        "(e, [v, names]) => { e.value = v; for (const n of names) e.dispatchEvent(new Event(n, { bubbles: true })); }",
+        [str(value), list(events)],
+    )
+
+
+LAST = f"""() => {{ const r = {PANEL}.lastResult; return {{ exact: r.exact, ghost: Boolean(r.ghost), document: r.document, snapped: r.snapped, family: r.face?.family ?? null }}; }}"""
+OVERLAY_FAMILY = f"""() => getComputedStyle({PANEL}.shadowRoot.querySelector('#field-text')).fontFamily.replace(/["']/g, '')"""
+
+
+async def type_title_and_text(page):
+    await fill_text(page, "Заголовок", "title")
+    await fill_text(page, "Широкий текст", "text")
+    await settle(page)
+
+
+async def check_slider_drag_blocks_print(p, browser):
+    async with panel(p, browser) as page:
+        await type_title_and_text(page)
+        blocked = (await texts(page))["render_approximate"]
+        await set_range(page, "font_weight", 500, ("input",))
+        await settle(page)
+        last = await page.evaluate(LAST)
+        assert last["exact"] is False and last["document"] is None, (
+            last
+        )  # approximate even on the grid
+        assert last["snapped"]["weight"] == 500, last
+        assert await page.locator("#print").is_disabled()
+        assert blocked in await page.locator("#print").get_attribute("title")
+        await page.locator("#print").dispatch_event("click")
+        await page.wait_for_timeout(100)
+        assert await calls(page, "print_bitmap") == []
+        await set_range(page, "font_weight", 500, ("change",))
+        await settle(page)
+        assert (await page.evaluate(LAST))["exact"] is True
+        assert await page.locator("#print").is_enabled()
+        # A keyboard step fires input and change together: the exact render still lands.
+        await page.locator("#font_weight").focus()
+        await page.keyboard.press("ArrowRight")
+        await settle(page)
+        assert (await page.evaluate(LAST))["exact"] is True
+        assert await page.locator("#print").is_enabled()
+
+
+async def check_slider_release_paths(p, browser):
+    """A drag that ends without `change` (pointer cancelled or lost) still renders the exact value."""
+    for event in ("pointercancel", "pointerup"):
+        async with panel(p, browser) as page:
+            await type_title_and_text(page)
+            await set_range(page, "font_width", 87, ("input",))
+            await settle(page)
+            assert (await page.evaluate(LAST))["exact"] is False
+            await page.evaluate(
+                f"() => window.dispatchEvent(new PointerEvent('{event}', {{ bubbles: true }}))"
+            )
+            await settle(page)
+            assert (await page.evaluate(LAST))["exact"] is True, event
+            assert await page.locator("#print").is_enabled(), event
+
+
+async def check_slider_drag_uses_approximate_face(p, browser):
+    async with panel(p, browser, viewport={"width": 1400, "height": 1000}) as page:
+        await type_title_and_text(page)
+        slider = page.locator("#font_weight")
+        box = await slider.bounding_box()
+        y = box["y"] + box["height"] / 2
+        await page.mouse.move(box["x"] + box["width"] * 0.5, y)
+        await page.mouse.down()
+        x = box["x"] + box["width"] * 0.62
+        await page.mouse.move(x, y, steps=4)
+        for _ in range(40):  # leave the grid: the approximate and exact weights must differ
+            if int(await slider.input_value()) % 50:
+                break
+            x += 1
+            await page.mouse.move(x, y)
+        value = int(await slider.input_value())
+        await settle(page)
+        last = await page.evaluate(LAST)
+        assert last["exact"] is False and last["document"] is None, last
+        snapped = last["snapped"]["weight"]
+        assert snapped != value and snapped % 50 == 0, (snapped, value)
+        family = await page.evaluate(OVERLAY_FAMILY)
+        assert family == last["family"] == f"tp-roboto_flex-w100-W{snapped}", (family, last)
+        assert await page.locator("#print").is_disabled()
+        await page.mouse.up()
+        await settle(page)
+        after = await page.evaluate(LAST)
+        assert after["exact"] is True, after
+        assert (
+            await page.evaluate(OVERLAY_FAMILY)
+            == after["family"]
+            == f"tp-roboto_flex-w100-W{value}"
+        )
+        assert after["family"] != family
+        assert await page.locator("#print").is_enabled()
+
+
+async def check_slider_drag_in_blank_state(p, browser):
+    async with panel(p, browser) as page:
+        await set_range(page, "font_weight", 700, ("input",))
+        await settle(page)
+        assert (await page.evaluate(LAST))["ghost"] is True
+        assert await page.locator("#raster").evaluate("(e) => e.classList.contains('ghost')")
+        assert not await page.locator("#notice.error").count()
+        assert await page.locator("#print").is_disabled()
+        assert (await texts(page))["no_input"] in await page.locator("#print").get_attribute(
+            "title"
+        )
+
+
+async def check_tiny5_restricts_controls(p, browser):
+    async with panel(p, browser) as page:
+        await page.locator("#font_size").fill("20")
+        await set_range(page, "font_width", 60)
+        await page.locator("#font").select_option("tiny5")
+        await settle(page)
+        size = page.locator("#font_size")
+        assert await size.evaluate("(e) => e.tagName") == "SELECT"
+        sizes = await size.locator("option").evaluate_all("(o) => o.map((x) => x.value)")
+        assert sizes == ["8", "16", "24", "32", "40", "48"], sizes
+        assert await size.input_value() == "16"
+        assert not await page.locator("#font_weight").is_visible()
+        width = page.locator("#font_width")
+        assert await width.evaluate("(e) => e.tagName") == "SELECT"
+        offered = await width.locator("option").evaluate_all(
+            "(o) => o.map((x) => [x.value, x.textContent])"
+        )
+        assert offered == [["100", "1x"], ["200", "2x"]], offered
+        assert await width.input_value() == "100"
+        await page.locator("#font").select_option("roboto_flex")
+        await settle(page)
+        assert await page.locator("#font_width").input_value() == "100"
+        assert await page.locator("#font_weight").input_value() == "400"
+        assert await page.locator("#font_size").input_value() == "16"
+
+
+async def check_hint_never_blocks(p, browser):
+    async with panel(p, browser) as page:
+        await type_title_and_text(page)
+        assert not await page.locator("#font-hint").is_visible()
+        await set_range(page, "font_weight", 801)
+        await settle(page)
+        want = await page.evaluate(
+            "async (url) => (await import(url)).closingCounterHint('roboto_flex', 24, 100, 801)",
+            f"{STATIC}studio/options.js",
+        )
+        assert want and await page.locator("#font-hint").inner_text() == want
+        assert await page.locator("#print").is_enabled()
+        await set_range(page, "font_weight", 400)
+        await settle(page)
+        assert not await page.locator("#font-hint").is_visible()
+
+
+async def check_columns_visibility(p, browser):
+    async with panel(p, browser) as page:
+        assert await page.locator("#columns").is_visible()
+        values = await page.locator("#columns option").evaluate_all("(o) => o.map((x) => x.value)")
+        assert values == ["1", "2", "3"], values
+        await page.locator("#template").select_option("qr_label")
+        await settle(page)
+        assert not await page.locator("#columns").is_visible()
+        await page.locator("#template").select_option("note")
+        assert await page.locator("#columns").is_visible()
+
+
+async def check_option_names_are_valid_options(p, browser):
+    template_keys = {
+        "font",
+        "font_size",
+        "font_width",
+        "font_weight",
+        "align",
+        "border",
+        "columns",
+        "qr_size",
+        "qr_correction",
+    }
+    async with panel(p, browser) as page:
+        await type_title_and_text(page)
+        options = (await page.evaluate(f"() => {PANEL}.getDocument()"))["options"]
+        assert set(options) == template_keys, options
+        assert set(options) <= set(renderer.DEFAULTS)
+        renderer.normalize_options(options)
+        await page.locator('[data-mode="qr"]').click()
+        await page.locator("#qr-data").fill("https://example.org")
+        await settle(page)
+        options = (await page.evaluate(f"() => {PANEL}.getDocument()"))["options"]
+        assert set(options) == {"border", "qr_size", "qr_correction"}, options
+        renderer.normalize_options(options)
+
+
+async def check_browser_only_options_notice(p, browser):
+    async with panel(p, browser) as page:
+        await type_title_and_text(page)
+        await page.locator("#automation summary").click()
+        await page.wait_for_function(
+            f"() => {PANEL}.shadowRoot.querySelector('#action-data').textContent !== ''"
+        )
+        assert "tinyprint.print_document" in await page.locator("#action-data").inner_text()
+        await page.locator("#columns").select_option("2")
+        await settle(page)
+        shown = await page.locator("#action-data").inner_text()
+        assert "только в панели" in shown and "print_document" not in shown, shown
+        await page.locator("#columns").select_option("1")
+        await settle(page)
+        assert "tinyprint.print_document" in await page.locator("#action-data").inner_text()
+        await page.locator("#font").select_option("tiny5")
+        await page.locator("#font_width").select_option("200")
+        await settle(page)
+        shown = await page.locator("#action-data").inner_text()
+        assert "только в панели" in shown and "print_document" not in shown, shown
+
+
+async def check_full_range_sliders_change_strip(p, browser):
+    async with panel(p, browser) as page:
+        await type_title_and_text(page)
+        for key, values in (
+            ("font_width", (25, 50, 75, 100, 151)),
+            ("font_weight", (100, 400, 700, 1000)),
+        ):
+            seen = []
+            for value in values:
+                await set_range(page, key, value)
+                await settle(page)
+                seen.append(tuple(await page.evaluate(CANVAS_HASH)))
+            assert len(set(seen)) == len(values), (key, seen)
+        await set_range(page, "font_width", 100)
+        await set_range(page, "font_weight", 400)
+        await settle(page)
+        expected = await reference(
+            page, {**note(title="Заголовок", text="Широкий текст"), "options": {}}
+        )
+        assert await canvas_bytes(page) == expected
+
+
+async def check_image_mode_shows_only_image_options(p, browser, image_file):
+    async with panel(p, browser) as page:
+        await page.locator('[data-mode="image"]').click()
+        for key in ("font", "font_size", "font_width", "font_weight", "align", "columns", "border"):
+            assert not await page.locator(f"#{key}").is_visible(), key
+        for key in ("preset", "method", "brightness", "threshold", "invert"):
+            assert await page.locator(f"#{key}").is_visible(), key
+        assert await page.evaluate(f"() => {PANEL}.getDocument()") is None
+        await page.locator("#image-file").set_input_files(str(image_file))
+        await page.wait_for_function(f"() => {PANEL}.image")
+        await settle(page)
+        assert await page.evaluate(f"() => {PANEL}.getDocument()") is None
+
+
+async def check_option_controls_have_names(p, browser):
+    keys = ("font", "font_size", "font_width", "font_weight", "columns", "align", "border")
+    async with panel(p, browser) as page:
+        for key in (*keys, "qr_size", "qr_correction"):
+            name = await page.evaluate(
+                f"""(key) => {{ const root = {PANEL}.shadowRoot; const e = root.querySelector('#' + key); const l = root.querySelector('label[for=' + key + ']') ?? e.closest('label'); return e.getAttribute('aria-label') || (l ? l.textContent.trim() : ''); }}""",
+                key,
+            )
+            assert re.search("[А-Яа-я]", name), (key, name)
+
+
+async def check_option_bar_stays_visible(p, browser):
+    """Wide: the bar and the strip stay on screen while the page scrolls (sticky)."""
+    async with panel(p, browser, viewport={"width": 1400, "height": 1000}) as page:
+        await fill_text(page, "\n".join(f"строка {n}" for n in range(30)), "text")
+        await settle(page)
+        position = await page.evaluate(
+            f"() => getComputedStyle({PANEL}.shadowRoot.querySelector('.live')).position"
+        )
+        assert position == "sticky", position
+        await page.evaluate(f"() => {{ {PANEL}.scrollTop = {PANEL}.scrollHeight; }}")
+        await page.wait_for_timeout(100)
+        for selector in ("#font_weight", "#font_width", "#font", ".canvas"):
+            rect = await page.evaluate(
+                f"(s) => {{ const r = {PANEL}.shadowRoot.querySelector(s).getBoundingClientRect(); return [r.top, r.bottom, innerHeight]; }}",
+                selector,
+            )
+            assert rect[0] >= 0 and rect[1] <= rect[2] and rect[1] > rect[0], (selector, rect)
+
+
 CHECKS = [
     ("no #preview anywhere; only printer_info on load", check_no_preview_and_load, False),
     (
@@ -1668,6 +1955,31 @@ CHECKS = [
     ("overlays have names and Tab follows the visual order", check_keyboard_and_names, False),
     ("overlay text is text, not HTML", check_overlay_text_is_not_html, False),
     ("single-line fields refuse line breaks", check_single_line_fields_refuse_line_breaks, False),
+    ("slider drag blocks Print until release", check_slider_drag_blocks_print, False),
+    ("a drag ending without change still renders exactly", check_slider_release_paths, False),
+    (
+        "slider drag shows the approximate face; release shows the exact one",
+        check_slider_drag_uses_approximate_face,
+        False,
+    ),
+    ("slider drag in the blank state keeps the ghost", check_slider_drag_in_blank_state, False),
+    ("switching to Tiny5 restricts the controls", check_tiny5_restricts_controls, False),
+    ("the closing-counter hint never blocks", check_hint_never_blocks, False),
+    ("columns is hidden for qr_label and visible for note", check_columns_visibility, False),
+    ("option names are valid Python options", check_option_names_are_valid_options, False),
+    (
+        "browser-only options replace the automation action with a notice",
+        check_browser_only_options_notice,
+        False,
+    ),
+    (
+        "full-range sliders visibly change the strip",
+        check_full_range_sliders_change_strip,
+        False,
+    ),
+    ("image mode shows only image options", check_image_mode_shows_only_image_options, True),
+    ("option controls have Russian accessible names", check_option_controls_have_names, False),
+    ("option bar and strip stay visible while scrolling", check_option_bar_stays_visible, False),
 ]
 
 

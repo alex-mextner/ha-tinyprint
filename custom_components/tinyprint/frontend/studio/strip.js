@@ -6,6 +6,7 @@ import { BLANK } from '../renderer/index.js';
 /** Task 2 outcome (measured prefix widths and baseline, user-confirmed caret): 'overlay' | 'docked-all'. */
 export const EDIT_POLICY = 'overlay';
 
+const BASELINE_CACHE_LIMIT = 64; // font sizes and line heights seen: a handful in practice, never unbounded
 const WIDTH = 384; // paper dots
 const BAND_PAD = 8; // rows of paper margin above and below the lines of every text band
 const LOOSE_ROW = { single: 44, multi: 96 }; // CSS px of an input shown without a strip to sit on
@@ -53,6 +54,7 @@ export class PaperStrip {
   #zoom = 1;
   #area;
   #disabled = false;
+  #baselines = new Map(); // 'font file/size/line height/pixel ratio' -> measured baseline offset
 
   constructor(container) {
     this.#container = container;
@@ -327,6 +329,31 @@ export class PaperStrip {
     return { kind: 'slot', ...slot, face };
   }
 
+  /**
+   * Distance from the top of a line box to its baseline, as this browser lays it out (Chrome rounds it
+   * down to a whole pixel, Firefox keeps halves), measured on a hidden probe with the overlay's font
+   * and line height. Falls back to centring the glyph row when the probe has no layout.
+   */
+  #baselineOffset({ face, size, step, ascent, descent }) {
+    // Width and weight axes do not move the baseline; browser zoom and screen density change its rounding.
+    const key = `${face.entry.file}/${size}/${step}/${devicePixelRatio}`;
+    const known = this.#baselines.get(key);
+    if (known !== undefined) return known;
+    const probe = document.createElement('div');
+    probe.style.cssText = `position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;white-space:pre;text-rendering:geometricPrecision;font:${face.css(size)};line-height:${step}px`;
+    const mark = document.createElement('span');
+    mark.style.cssText = 'display:inline-block;width:0;height:0';
+    probe.append('H', mark);
+    this.#area.append(probe);
+    const box = probe.getBoundingClientRect();
+    const offset = mark.getBoundingClientRect().bottom - box.top;
+    probe.remove();
+    if (box.height === 0) return (step + ascent - descent) / 2; // no layout right now (hidden panel): not cached
+    if (this.#baselines.size >= BASELINE_CACHE_LIMIT) this.#baselines.delete(this.#baselines.keys().next().value); // first inserted
+    this.#baselines.set(key, offset);
+    return offset;
+  }
+
   #place() {
     const loose = !this.#result?.pixels;
     const zoom = this.#zoom;
@@ -347,9 +374,9 @@ export class PaperStrip {
         el.style.cssText = 'display:none';
         continue;
       }
-      // The line box centres the glyph row in `step`; the bitmap puts the baseline `ascent` below the
-      // row top. Moving the box up by the half-leading (never negative padding) makes them coincide.
-      const shift = (geometry.ascent + geometry.descent - geometry.step) / 2;
+      // The bitmap puts the baseline `ascent` below the row top; the browser puts the text baseline
+      // `baselineOffset` below the top of the line box. Moving the box by the difference makes them coincide.
+      const shift = geometry.ascent - this.#baselineOffset(geometry);
       el.rows = Math.max(1, Math.round(geometry.h / geometry.step));
       el.style.cssText = [
         'position:absolute',

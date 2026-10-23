@@ -18,6 +18,17 @@ const FIELD_CAPTIONS = {title: 'Заголовок', text: 'Текст', footer:
 const CHECKLIST_TEXT_CAPTION = 'Пункты — каждый с новой строки';
 const EMPTY_STRIP_TEXT = 'Введите текст, QR или загрузите картинку: лента появится здесь.';
 const FILE_HINT = 'До 2 МиБ и 4 миллионов пикселей. Файл не покидает браузер: на печать уходит только готовый растр.';
+const BROWSER_ONLY_NOTICE = 'Несколько колонок и Tiny5 шириной 2x работают только в панели, поэтому действие для автоматизации недоступно: печатайте из панели.';
+// While one of these sliders is dragged the strip shows the coarse-grid approximate render.
+const SLIDER_OPTIONS = ['font_width', 'font_weight'];
+const RELEASE_EVENTS = ['pointerup', 'pointercancel'];
+
+function element(tag, attributes = {}, text) {
+  const created = document.createElement(tag);
+  for (const [name, value] of Object.entries(attributes)) created.setAttribute(name, value);
+  if (text !== undefined) created.textContent = text;
+  return created;
+}
 // A required field the user has not filled yet still takes its place on the strip: it is drawn as
 // an invisible character so what was typed stays visible. Such a render is never printable.
 const PLACEHOLDER_CHAR = '\u200b';
@@ -74,6 +85,10 @@ class TinyPrintPanel extends HTMLElement {
     this.loadAttempted = false;
     this.requestedSignature = '';
     this.needsDevicePick = false;
+    this.fonts = {};
+    this.fontName = null; // the font the size, width and weight controls were built for
+    this.releaseSlider = null;
+    this.approximateRequested = false; // the newest render request was a slider-drag approximation
   }
 
   set hass(value) {
@@ -85,6 +100,7 @@ class TinyPrintPanel extends HTMLElement {
   // HA builds a new element on every visit: release the scheduler and the registered font faces, and
   // let the next connect mount from scratch (a disposed renderer cannot be reused).
   disconnectedCallback() {
+    if (this.releaseSlider) for (const name of RELEASE_EVENTS) window.removeEventListener(name, this.releaseSlider);
     this.epoch += 1;
     this.imageLoadSequence += 1;
     this.stripObserver?.disconnect();
@@ -154,6 +170,10 @@ class TinyPrintPanel extends HTMLElement {
         .box { background:white; } .overlay::selection { background:rgba(0,122,115,.3); color:transparent; }
         .overlay:not(.loose)::placeholder { color:transparent; opacity:1; } .overlay:not(.loose):focus-visible { outline:2px solid var(--primary-color,#007a73); outline-offset:0; } .overlay.slot:not(:focus) { pointer-events:none; }
         #docked:not(:empty) { margin-top:16px; }
+        .live { min-width:0; } .bar { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:2px 14px; align-items:end; margin-top:12px; }
+        .bar .field { margin:0 0 8px; } .bar .check { min-height:44px; } .bar details { grid-column:1/-1; margin-top:0; } .bar summary { padding:6px 0; }
+        #options { margin:0; } #font-hint { margin:0 0 6px; color:var(--warning-color,#8a5a00); }
+        @media(min-width:900px) and (min-height:900px) { .live { position:sticky; top:0; z-index:2; background:var(--card-background-color,#fff); padding:4px 0 2px; } .live .canvas { min-height:240px; max-height:calc(100vh - 470px); } }
         .empty { padding:54px 12px; text-align:center; max-width:270px; color:var(--secondary-text-color,#697580); font-size:14px; }
         .empty .symbol { font-size:40px; display:block; margin-bottom:12px; }
         #raster { display:block; width:384px; max-width:none; height:auto; background:white; box-shadow:0 4px 15px #0002; image-rendering:pixelated; }
@@ -176,18 +196,38 @@ class TinyPrintPanel extends HTMLElement {
               <div id="qr-form" hidden><div class="field"><label for="qr-data">Ссылка или данные QR</label><textarea id="qr-data" maxlength="500" placeholder="https://…"></textarea></div><p class="hint">Целые модули и белое поле сохраняются. Фотофильтры к QR не применяются.</p></div>
               <div id="image-form" hidden>
                 <div class="field"><label for="image-file">Изображение с телефона или компьютера</label><input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"><p id="file-name" class="hint">${FILE_HINT}</p></div>
-                <div class="field"><label for="preset">Подготовка к термопечати</label><select id="preset" data-option="preset"></select></div>
-                <div class="row"><div class="field"><label for="method">Преобразование</label><select id="method" data-option="method"><option value="floyd_steinberg">Floyd–Steinberg</option><option value="threshold">Чёрное / белое</option><option value="ordered">Упорядоченный растр</option></select></div><div class="field"><label for="rotate">Поворот</label><select id="rotate" data-option="rotate" data-number><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></div></div>
-                ${this.range('brightness','Яркость',.25,2,.05,1.1)}${this.range('contrast','Контраст',.25,3,.05,1.25)}${this.range('sharpness','Резкость',0,3,.1,1.2)}${this.range('threshold','Порог чёрного',1,254,1,128)}
-                <div class="row"><div class="field"><label for="fit">Масштаб</label><select id="fit" data-option="fit"><option value="width">По заданной ширине</option><option value="original">Без увеличения</option></select></div><div class="field"><label for="width">Ширина, точки</label><input id="width" data-option="width" data-number type="number" min="96" max="384" value="384"></div></div>
-                <label class="check"><input type="checkbox" id="invert" data-option="invert">Инвертировать изображение</label>
               </div>
-              <div id="type-options"><div class="row"><div class="field"><label for="font_size">Размер текста</label><input id="font_size" data-option="font_size" data-number type="number" min="12" max="48" value="24"></div><div class="field"><label for="align">Выравнивание</label><select id="align" data-option="align"><option value="left">Слева</option><option value="center">По центру</option><option value="right">Справа</option></select></div></div><label class="check"><input type="checkbox" id="border" data-option="border">Рамка этикетки</label></div>
-              <details id="qr-options"><summary>Размер и надёжность QR</summary><div class="row"><div class="field"><label for="qr_size">Размер QR, точки</label><input id="qr_size" data-option="qr_size" data-number type="number" min="96" max="360" value="320"></div><div class="field"><label for="qr_correction">Коррекция ошибок</label><select id="qr_correction" data-option="qr_correction"><option value="M">M · стандартная</option><option value="Q">Q · повышенная</option><option value="H">H · максимальная</option></select></div></div></details>
             </fieldset>
             <div class="buttons"><button id="print" class="button primary" disabled>Печатать</button><button id="cancel" class="button" hidden>Остановить</button></div>
           </section>
-          <section class="card strip-card" aria-label="Бумажная лента"><div class="strip-head"><h2>На бумаге</h2><span class="badge">384 точки</span><button id="zoom" class="button" aria-label="Масштаб ленты" aria-pressed="false">1×</button></div><div id="paper"></div><div class="caption"><span id="dimensions"></span><span id="ink"></span></div><div id="notice" role="status" aria-live="polite" hidden></div><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
+          <section class="card strip-card" aria-label="Бумажная лента">
+            <div class="live">
+              <div class="strip-head"><h2>На бумаге</h2><span class="badge">384 точки</span><button id="zoom" class="button" aria-label="Масштаб ленты" aria-pressed="false">1×</button></div>
+              <fieldset id="options" aria-label="Параметры этикетки">
+                <div id="text-options" class="bar">
+                  <div class="field"><label for="font">Шрифт</label><select id="font" data-option="font"></select></div>
+                  <div class="field" id="size-field"></div><div class="field" id="width-field"></div><div class="field" id="weight-field"></div>
+                  <div class="field" id="columns-field"><label for="columns">Колонки</label><select id="columns" data-option="columns" data-number><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+                  <div class="field"><label for="align">Выравнивание</label><select id="align" data-option="align"><option value="left">Слева</option><option value="center">По центру</option><option value="right">Справа</option></select></div>
+                </div>
+                <p id="font-hint" class="hint" role="status" hidden></p>
+                <div id="shared-options" class="bar">
+                  <label class="check"><input type="checkbox" id="border" data-option="border">Рамка этикетки</label>
+                  <details id="qr-options"><summary>Размер и надёжность QR</summary><div class="row"><div class="field"><label for="qr_size">Размер QR, точки</label><input id="qr_size" data-option="qr_size" data-number type="number" min="96" max="360" value="320"></div><div class="field"><label for="qr_correction">Коррекция ошибок</label><select id="qr_correction" data-option="qr_correction"><option value="M">M · стандартная</option><option value="Q">Q · повышенная</option><option value="H">H · максимальная</option></select></div></div></details>
+                </div>
+                <div id="image-options" class="bar" hidden>
+                  <div class="field"><label for="preset">Подготовка к термопечати</label><select id="preset" data-option="preset"></select></div>
+                  <div class="field"><label for="method">Преобразование</label><select id="method" data-option="method"><option value="floyd_steinberg">Floyd–Steinberg</option><option value="threshold">Чёрное / белое</option><option value="ordered">Упорядоченный растр</option></select></div>
+                  <div class="field"><label for="rotate">Поворот</label><select id="rotate" data-option="rotate" data-number><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></div>
+                  ${this.range('brightness','Яркость',.25,2,.05,1.1)}${this.range('contrast','Контраст',.25,3,.05,1.25)}${this.range('sharpness','Резкость',0,3,.1,1.2)}${this.range('threshold','Порог чёрного',1,254,1,128)}
+                  <div class="field"><label for="fit">Масштаб</label><select id="fit" data-option="fit"><option value="width">По заданной ширине</option><option value="original">Без увеличения</option></select></div>
+                  <div class="field"><label for="width">Ширина, точки</label><input id="width" data-option="width" data-number type="number" min="96" max="384" value="384"></div>
+                  <label class="check"><input type="checkbox" id="invert" data-option="invert">Инвертировать изображение</label>
+                </div>
+              </fieldset>
+              <div id="paper"></div><div class="caption"><span id="dimensions"></span><span id="ink"></span></div>
+            </div>
+            <div id="notice" role="status" aria-live="polite" hidden></div><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
         </div>
       </main>`;
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => this.switchMode(button.dataset.mode)));
@@ -196,7 +236,13 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#preset').addEventListener('change', () => this.applyPreset());
     this.$('#image-file').addEventListener('change', event => this.readImage(event));
     this.$('#editor').addEventListener('input', event => this.onEdit(event));
-    this.$('#editor').addEventListener('change', event => { if (event.target !== this.$('#preset') && event.target !== this.$('#template')) this.renderIfChanged(); });
+    this.$('#editor').addEventListener('change', event => { if (event.target !== this.$('#template')) this.renderIfChanged(); });
+    this.$('#options').addEventListener('input', event => this.onEdit(event));
+    this.$('#options').addEventListener('change', event => this.onOptionChange(event));
+    // A drag that ends where it started, or whose pointer is cancelled or lost, fires no `change`.
+    this.releaseSlider = () => { if (this.approximateRequested) this.renderIfChanged(); };
+    for (const name of RELEASE_EVENTS) window.addEventListener(name, this.releaseSlider);
+    this.$('#options').addEventListener('lostpointercapture', this.releaseSlider);
     this.$('#print').addEventListener('click', () => this.print());
     this.$('#cancel').addEventListener('click', () => this.cancel());
     this.$('#refresh').addEventListener('click', () => { if (this.failure) this.renderNow(); this.loadInfo(); });
@@ -212,6 +258,56 @@ class TinyPrintPanel extends HTMLElement {
 
   range(id, title, min, max, step, value) {
     return `<div class="field"><label for="${id}">${title} <small id="value-${id}">${value}</small></label><input id="${id}" data-option="${id}" data-number type="range" min="${min}" max="${max}" step="${step}" value="${value}"></div>`;
+  }
+
+  /**
+   * Size, width and weight controls as the font's table allows them: a number or slider for a range,
+   * a select for a closed list, nothing for a fixed weight. `values` are the options to show.
+   */
+  buildFontControls(fontName, values) {
+    const { sizes, width, weight } = this.fonts[fontName];
+    this.fontName = fontName;
+    const field = (id, title, control, slider) => {
+      const label = element('label', { for: id }, title);
+      if (slider) label.append(' ', element('small', { id: `value-${id}` }, control.value));
+      return [label, control];
+    };
+    const choice = (id, items, value) => {
+      const select = element('select', { id, 'data-option': id, 'data-number': '' });
+      for (const [optionValue, text] of items) select.append(element('option', { value: optionValue }, text));
+      select.value = value;
+      return select;
+    };
+    const input = (id, type, spec, value) => {
+      const control = element('input', { id, 'data-option': id, 'data-number': '', type, min: spec.min, max: spec.max, ...(type === 'range' ? { step: 1 } : {}) });
+      control.value = value;
+      return control;
+    };
+    this.$('#size-field').replaceChildren(...field('font_size', 'Размер текста', sizes.values
+      ? choice('font_size', sizes.values.map(v => [v, v]), values.font_size)
+      : input('font_size', 'number', sizes, values.font_size)));
+    this.$('#width-field').replaceChildren(...(width.kind === 'axis'
+      ? field('font_width', 'Ширина шрифта', input('font_width', 'range', width, values.font_width), true)
+      : field('font_width', 'Ширина шрифта', choice('font_width', width.values.map(v => [v, `${v / 100}x`]), values.font_width))));
+    this.$('#weight-field').hidden = weight.kind !== 'axis';
+    this.$('#weight-field').replaceChildren(...(weight.kind === 'axis'
+      ? field('font_weight', 'Жирность', input('font_weight', 'range', weight, values.font_weight), true)
+      : []));
+  }
+  /** A new font: the controls change to its table, width and weight go to its defaults. */
+  switchFont() {
+    const next = this.$('#font').value;
+    const coerced = this.modules.options.coerceForFont({ ...this.effectiveOptions(), font: this.fontName }, this.fonts, next);
+    this.buildFontControls(next, coerced);
+  }
+  /** What follows from the controls: the columns control exists only for a template with a main text. */
+  updateOptionUi() {
+    const spec = this.templates[this.$('#template').value];
+    this.$('#columns-field').hidden = !(this.mode === 'template' && spec?.fields.includes('text'));
+    const { font, font_size, font_width, font_weight } = this.effectiveOptions();
+    const hint = this.mode === 'template' ? this.modules.options.closingCounterHint(font, font_size, font_width, font_weight) : null;
+    this.$('#font-hint').hidden = !hint;
+    this.$('#font-hint').textContent = hint ?? '';
   }
 
   /** The `hass` object is replaced on every update: it is read here and in `jobState`, never kept. */
@@ -272,9 +368,12 @@ class TinyPrintPanel extends HTMLElement {
       if (!this.$('#device').options.length) this.fillSelect(this.$('#device'), [['', 'Принтер не найден — печать недоступна']], '');
       if (!this.loaded) {
         this.templates = info.templates; this.presets = info.presets;
+        this.fonts = info.fonts;
         this.renderer = new this.modules.renderer.Renderer({ baseUrl: BASE_URL, fonts: info.fonts, templates: info.templates });
         this.fillSelect(this.$('#template'), Object.entries(this.templates).map(([key, item]) => [key, item.name]), 'note');
         this.fillSelect(this.$('#preset'), Object.entries(this.presets).map(([key, item]) => [key, item.name]), 'photo');
+        this.fillSelect(this.$('#font'), Object.entries(this.fonts).map(([key, item]) => [key, item.label]), this.modules.renderer.DEFAULT_OPTIONS.font);
+        this.buildFontControls(this.$('#font').value, this.modules.renderer.DEFAULT_OPTIONS);
         this.loaded = true;
         this.syncFields();
         this.renderNow();
@@ -336,6 +435,7 @@ class TinyPrintPanel extends HTMLElement {
   effectiveOptions() { return { ...this.modules.renderer.DEFAULT_OPTIONS, ...this.readOptions() }; }
   /** Overlay or docked per field, from the options now in the controls. */
   syncFields() {
+    this.updateOptionUi();
     const options = this.effectiveOptions();
     const { fieldEditMode, EDIT_POLICY } = this.modules.strip;
     const mode = field => fieldEditMode(field, { columns: options.columns, policy: EDIT_POLICY, font: options.font, width: options.font_width });
@@ -349,8 +449,9 @@ class TinyPrintPanel extends HTMLElement {
     if (this.printing) return;
     this.mode = mode;
     for (const id of ['template', 'qr', 'image']) this.$(`#${id}-form`).hidden = id !== mode;
-    this.$('#type-options').hidden = mode === 'image';
-    this.$('#qr-options').hidden = mode === 'image';
+    this.$('#text-options').hidden = mode !== 'template';
+    this.$('#shared-options').hidden = mode === 'image';
+    this.$('#image-options').hidden = mode !== 'image';
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.mode === mode)));
     this.syncFields();
     this.renderNow();
@@ -358,15 +459,19 @@ class TinyPrintPanel extends HTMLElement {
   onEdit(event) {
     const control = event.target;
     if (control.type === 'range') this.$(`#value-${control.id}`).textContent = control.value;
-    if (control.id !== 'preset') this.renderIfChanged();
+    if (control.id !== 'preset' && control.id !== 'font') this.renderIfChanged(control.type === 'range' && SLIDER_OPTIONS.includes(control.id));
   }
-
+  /** `change` ends a slider drag (also a keyboard step): the exact value is rendered. */
+  onOptionChange(event) {
+    if (event.target.id === 'preset') return; // applyPreset renders
+    if (event.target.id === 'font') this.switchFont();
+    this.renderIfChanged();
+  }
   /** Visible option controls only: a template never carries image options and vice versa. */
   readOptions() {
     const options = {};
     this.shadowRoot.querySelectorAll('[data-option]').forEach(control => {
-      if (control.closest('[hidden]')) return;
-      if (control.dataset.option === 'preset' && !control.value) return;
+      if (control.closest('[hidden]') || (control.tagName === 'SELECT' && control.options.length === 0)) return;
       options[control.dataset.option] = control.type === 'checkbox' ? control.checked : (control.hasAttribute('data-number') ? Number(control.value) : control.value);
     });
     return options;
@@ -406,9 +511,10 @@ class TinyPrintPanel extends HTMLElement {
   inputKnown(s) { return s.mode !== 'template' || Boolean(this.templates[s.template]); }
 
   /** Re-render with the current draft, whatever changed. */
-  renderNow() {
+  renderNow(approximate = false) {
     if (!this.loaded || !this.scheduler) return;
-    this.requestedSignature = this.signature();
+    this.requestedSignature = this.signature(approximate);
+    this.approximateRequested = approximate;
     this.failure = null;
     this.scheduler.request(() => {
       const s = this.inputState();
@@ -417,7 +523,7 @@ class TinyPrintPanel extends HTMLElement {
       // Even an invisible character encodes into a scannable QR: a label without its QR data draws nothing.
       if (missing.includes('qr')) return { document: null, ghost: false, note: `${this.modules.state.BLOCKER_TEXT.required_blank} ${this.fieldCaption(s.template, 'qr')}`, image: null };
       for (const key of missing) doc.fields[key] = PLACEHOLDER_CHAR;
-      return { document: doc, ghost, partial: missing.length > 0, image: this.image, approximate: false };
+      return { document: doc, ghost, partial: missing.length > 0, image: this.image, approximate };
     });
     this.updateButtons();
   }
@@ -425,11 +531,12 @@ class TinyPrintPanel extends HTMLElement {
    * Handlers call this: a `change` that follows the `input` with the same content (the blur caused
    * by clicking Print) must not start a render, or the click would land on render_pending.
    */
-  renderIfChanged() {
-    if (this.loaded && this.signature() !== this.requestedSignature) this.renderNow();
+  renderIfChanged(approximate = false) {
+    if (this.loaded && this.signature(approximate) !== this.requestedSignature) this.renderNow(approximate);
   }
-  signature() {
-    return JSON.stringify([this.inputState(), this.readOptions(), this.image?.id ?? null]);
+  /** The inputs plus whether the render is the slider-drag approximation: the release must re-render exactly. */
+  signature(approximate = false) {
+    return JSON.stringify([this.inputState(), this.readOptions(), this.image?.id ?? null, approximate]);
   }
   /** Scheduler `run`: stamps the generation and the ghost flag onto the result. */
   async run(input, generation) {
@@ -511,6 +618,7 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#diagnose').disabled = this.pendingCall || !this.$('#device').value;
     this.$('#cancel').hidden = !this.printing;
     this.$('#editor').disabled = this.printing;
+    this.$('#options').disabled = this.printing;
     this.strip.setDisabled(this.printing);
     this.$('#device').disabled = this.printing;
   }
@@ -564,8 +672,12 @@ class TinyPrintPanel extends HTMLElement {
     finally { if (epoch === this.epoch) { this.pendingCall = false; this.updateButtons(); await this.loadInfo(); } }
   }
 
+  /** Options the Pillow renderer cannot draw make the recipe impossible (the panel still prints the bitmap). */
+  browserOnly() {
+    return this.mode !== 'image' && this.modules.options.usesBrowserOnlyOptions(this.effectiveOptions());
+  }
   action() {
-    const payload = this.getDocument();
+    const payload = this.browserOnly() ? null : this.getDocument();
     return payload && {action: 'tinyprint.print_document', data: {device_id: this.$('#device').value || 'DEVICE_ID', document: payload}};
   }
   showAction() {
@@ -573,11 +685,12 @@ class TinyPrintPanel extends HTMLElement {
     const action = this.action();
     this.$('#action-data').textContent = this.mode === 'image'
       ? 'Печать картинки из автоматизации использует сервис print_document с image_base64 или разрешённым локальным path; панель такой документ не строит.'
+      : this.browserOnly() ? BROWSER_ONLY_NOTICE
       : (action ? JSON.stringify(action, null, 2) : 'Введите данные: действие появится, когда лента отрисована точно.');
   }
   async copyAction() {
     const action = this.action();
-    if (!action) { this.notice('Нечего копировать: действие строится только для точно отрисованного шаблона или QR.', true); return; }
+    if (!action) { this.notice(this.browserOnly() ? BROWSER_ONLY_NOTICE : 'Нечего копировать: действие строится только для точно отрисованного шаблона или QR.', true); return; }
     try { await navigator.clipboard.writeText(JSON.stringify(action, null, 2)); this.notice('Действие скопировано. Вставьте его в YAML-редактор автоматизации.'); }
     catch (error) { this.notice('Буфер обмена недоступен в этом браузере. Текст действия можно выделить вручную.', true); }
   }
