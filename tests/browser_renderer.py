@@ -5,6 +5,7 @@ Run: python tests/browser_renderer.py
 
 import asyncio
 import base64
+import functools
 import io
 import itertools
 import json
@@ -29,6 +30,7 @@ FONTS_JS = f"{STATIC}renderer/fonts.js"
 LAYOUT_JS = f"{STATIC}renderer/layout.js"
 QR_JS = f"{STATIC}renderer/qr.js"
 IMAGE_JS = f"{STATIC}renderer/image.js"
+RENDERER_JS = f"{STATIC}renderer/index.js"
 VENDOR_QR_JS = f"{STATIC}vendor/qrcodegen.js"
 STUDIO = load("studio_render")
 
@@ -1943,6 +1945,635 @@ async def check_image_presets(page):
     assert result[0] != result[1], "photo and line_art produced the same bitmap"
 
 
+RENDERER_PRELUDE = """
+const r = await import(args.index);
+const pack = await import(args.pack);
+const renderer = new r.Renderer({ baseUrl: new URL(args.base), fonts: args.fonts_table, templates: args.templates });
+const go = (document, extra = {}) =>
+  renderer.render({ document, image: null, ghost: false, approximate: false, generation: 1, ...extra });
+const code = async (fn) => {
+  try { await fn(); return null; } catch (e) { return e instanceof r.RenderError ? e.code : 'NOT_RENDER_ERROR:' + e; }
+};
+const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const opt = (o) => ({ kind: 'text', text: args.sample, options: o });
+"""
+SAMPLE = "Привет, мир! Широкий текст для проверки ползунков 0123456789"
+
+
+def renderer_args(**extra):
+    return {
+        "index": RENDERER_JS,
+        "pack": PACK,
+        "base": STATIC,
+        "fonts_table": FONTS,
+        "templates": STUDIO.TEMPLATES,
+        "sample": SAMPLE,
+        **extra,
+    }
+
+
+async def run_renderer(page, body: str, **extra):
+    script = (
+        "async (args) => {"
+        + RENDERER_PRELUDE
+        + "try {"
+        + body
+        + "} finally { renderer.dispose(); }}"
+    )
+    return await page.evaluate(script, renderer_args(**extra))
+
+
+NOTE = {
+    "kind": "template",
+    "template": "note",
+    "fields": {"title": "Заголовок", "text": "Привет, мир\nвторая строка", "footer": "низ"},
+    "options": {},
+}
+
+
+async def check_renderer_deterministic(page):
+    result = await run_renderer(
+        page,
+        """
+        const a = await go(args.note);
+        const b = await go(args.note);
+        const view = pack.unpack(a.bitmap, a.rows);
+        return {
+          same: same(a.bitmap, b.bitmap),
+          pixels: same(a.pixels.data, view.data),
+          size: [a.pixels.width, a.pixels.height, a.rows, a.bitmap.length],
+          exact: [a.exact, a.ghost], gen: a.generation, face: a.face.family,
+          ink: a.inkPercent, doc: a.document.options.columns,
+        };
+        """,
+        note=NOTE,
+    )
+    assert result["same"] and result["pixels"], result
+    assert result["size"][0] == 384 and result["size"][1] == result["size"][2], result
+    assert result["size"][3] == 48 * result["size"][2], result
+    assert result["exact"] == [True, False] and result["gen"] == 1, result
+    assert result["ink"] > 0 and result["doc"] == 1, result
+
+
+async def check_renderer_kinds(page):
+    png = png_bytes(gradient_image(120, 80))
+    result = await run_renderer(
+        page,
+        """
+        const image = await (await import(args.image_js)).decodeUpload(new Blob([Uint8Array.from(args.png)]));
+        const docs = {
+          template: args.note,
+          text: opt({}),
+          qr: { kind: 'qr', text: 'https://example.com', options: { qr_size: 200 } },
+          image: { kind: 'image', options: { fit: 'width', method: 'threshold' } },
+        };
+        const out = {};
+        for (const [name, doc] of Object.entries(docs)) {
+          const res = await go(doc, { image: { id: image.id, bitmap: image.bitmap } });
+          out[name] = [res.rows, res.bitmap.length === 48 * res.rows, res.inkPercent > 0,
+                       res.face === null, res.blocks.length, res.document.kind];
+        }
+        out.noImage = await code(() => go({ kind: 'image', options: {} }));
+        out.noId = await code(() => go(docs.image, { image: { bitmap: image.bitmap } }));
+        const dim = await go(docs.image, { image: { id: image.id, bitmap: image.bitmap }, ghost: true });
+        const levels = new Set();
+        for (let i = 0; i < dim.pixels.data.length; i += 4) levels.add(dim.pixels.data[i] + ':' + dim.pixels.data[i + 3]);
+        out.imageGhost = [dim.bitmap, dim.document, dim.ghost, dim.exact, [...levels].sort()];
+        return out;
+        """,
+        note=NOTE,
+        png=png,
+        image_js=IMAGE_JS,
+    )
+    for name in ("template", "text", "qr", "image"):
+        rows, sized, inked, _, _, kind = result[name]
+        assert rows > 0 and sized and inked and kind == name, (name, result[name])
+    assert result["template"][3] is False and result["template"][4] == 3, result
+    assert result["qr"][3] and result["image"][3] and result["image"][4] == 0, result
+    assert result["noImage"] == result["noId"] == "bad_document", result
+    bitmap, document, ghost, exact, levels = result["imageGhost"]
+    assert bitmap is None and document is None and ghost and not exact, result
+    assert levels and all(level.endswith(":255") for level in levels), levels
+    assert len(levels) == 2 and "255:255" in levels, levels
+
+
+async def check_renderer_unknown_template(page):
+    result = await run_renderer(
+        page,
+        """
+        return [
+          await code(() => go({ kind: 'template', template: 'nope', fields: {}, options: {} })),
+          await code(() => go({ kind: 'template', template: '__proto__', fields: {}, options: {} })),
+        ];
+        """,
+    )
+    assert result == ["bad_document", "bad_document"], result
+
+
+async def check_renderer_ghost(page):
+    example = STUDIO.TEMPLATES["note"]["example"]
+    result = await run_renderer(
+        page,
+        """
+        const doc = { kind: 'template', template: 'note', fields: args.example, options: {} };
+        const g = await go(doc, { ghost: true });
+        const a = new Set();
+        for (let i = 0; i < g.pixels.data.length; i += 4) {
+          if (g.pixels.data[i + 3] !== 255) return { opaque: false };
+          a.add(g.pixels.data[i]);
+        }
+        const real = await go(doc);
+        const again = await go(doc);
+        return {
+          bitmap: g.bitmap, ghost: g.ghost, exact: g.exact, doc: g.document, rows: g.rows,
+          height: g.pixels.height, keys: Object.keys(g), grays: [...a].sort((x, y) => x - y),
+          slots: g.slots.length, blocks: g.blocks.length, realRows: real.rows, afterGhost: same(real.bitmap, again.bitmap) && real.inkPercent > 1,
+        };
+        """,
+        example=example,
+    )
+    assert result["bitmap"] is None and result["ghost"] is True and result["exact"] is False, result
+    assert result["doc"] is None and result["height"] == result["rows"] == result["realRows"], (
+        result
+    )
+    assert "bytes" not in result["keys"] and "packed" not in result["keys"], result
+    # Dimmed example text: opaque white page, a gray that is neither pure ink nor paper.
+    assert 255 in result["grays"] and 0 not in result["grays"], result
+    assert any(0 < g < 255 for g in result["grays"]), result
+    assert result["blocks"] == 3 and result["afterGhost"], result
+
+
+async def check_renderer_ghost_wins_over_approximate(page):
+    example = STUDIO.TEMPLATES["note"]["example"]
+    result = await run_renderer(
+        page,
+        """
+        const doc = { kind: 'template', template: 'note', fields: args.example,
+                      options: { font_width: 37, font_weight: 480 } };
+        const g = await go(doc, { ghost: true, approximate: true });
+        return { bitmap: g.bitmap, ghost: g.ghost, exact: g.exact, family: g.face.family, keys: Object.keys(g) };
+        """,
+        example=example,
+    )
+    assert result["bitmap"] is None and result["ghost"] and result["exact"] is False, result
+    # Ghost ignores `approximate`: the document is drawn as given, not snapped.
+    assert result["family"] == "tp-roboto_flex-w37-W480", result
+    assert "bytes" not in result["keys"] and "packed" not in result["keys"], result
+
+
+async def check_renderer_approximate(page):
+    result = await run_renderer(
+        page,
+        """
+        const at = (w, wt) => opt({ font_width: w, font_weight: wt });
+        const approx = await go(at(37, 480), { approximate: true });
+        const snapped = await go(at(35, 500));
+        const exact = await go(at(37, 480));
+        const onGrid = await go(at(35, 500), { approximate: true });
+        return {
+          equal: same(approx.bitmap, snapped.bitmap),
+          differs: !same(exact.bitmap, snapped.bitmap),
+          flags: [approx.exact, snapped.exact, exact.exact, onGrid.exact],
+          used: [approx.document.options.font_width, approx.document.options.font_weight],
+          requested: [exact.document.options.font_width, exact.document.options.font_weight],
+          keys: Object.keys(approx),
+          snap: [r.snapToGrid(475, 50, 100, 1000), r.snapToGrid(474, 50, 100, 1000),
+                 r.snapToGrid(0, 5, 25, 151), r.snapToGrid(999, 50, 100, 1000),
+                 r.snapToGrid(151, 5, 25, 151), r.snapToGrid(26, 5, 25, 151), r.snapToGrid(37, 5, 25, 151)],
+          steps: [r.APPROX_WIDTH_STEP, r.APPROX_WEIGHT_STEP],
+        };
+        """,
+    )
+    assert result["equal"] and result["differs"], result
+    assert result["flags"] == [False, True, True, False], result
+    assert result["used"] == [35, 500] and result["requested"] == [37, 480], result
+    assert "bytes" not in result["keys"] and "packed" not in result["keys"], result
+    assert result["snap"] == [500, 450, 25, 1000, 150, 25, 35], result
+    assert result["steps"] == [5, 50], result
+
+
+async def check_renderer_sliders(page):
+    result = await run_renderer(
+        page,
+        """
+        const cases = [[25, 400], [100, 400], [151, 400], [100, 100], [100, 1000]];
+        const out = [];
+        for (const [w, wt] of cases) out.push(await go(opt({ font_width: w, font_weight: wt })));
+        const pairs = [];
+        for (let i = 0; i < out.length; i += 1) {
+          for (let j = i + 1; j < out.length; j += 1) {
+            if (out[i].rows === out[j].rows && same(out[i].bitmap, out[j].bitmap)) pairs.push([i, j]);
+          }
+        }
+        return { pairs, light: out[3].inkPercent, heavy: out[4].inkPercent };
+        """,
+    )
+    assert result["pairs"] == [], result
+    assert result["heavy"] > result["light"], result
+
+
+async def check_renderer_tiny5_crisp(page):
+    result = await run_renderer(
+        page,
+        """
+        const runs = (data, w, h) => {
+          const lengths = new Set();
+          let bad = 0;
+          for (let y = 0; y < h; y += 1) {
+            let run = 0;
+            for (let x = 0; x <= w; x += 1) {
+              const a = x < w ? data[(y * w + x) * 4 + 3] : 0;
+              if (a !== 0 && a !== 255) bad += 1;
+              if (a > 0) run += 1;
+              else if (run) { lengths.add(run); run = 0; }
+            }
+          }
+          return { lengths: [...lengths], bad };
+        };
+        const out = {};
+        for (const size of [8, 16, 24]) {
+          const face = await renderer.faceFor({ font: 'tiny5', font_size: size, font_width: 100, font_weight: 400 });
+          const canvas = new OffscreenCanvas(384, 80);
+          const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+          ctx.textRendering = 'geometricPrecision';
+          ctx.font = face.css(size);
+          ctx.fillText('Привет', 4, face.ascent(size));
+          const found = runs(ctx.getImageData(0, 0, 384, 80).data, 384, 80);
+          out[size] = { ...found, ink: found.lengths.length > 0 };
+        }
+        const wide = await go({ kind: 'text', text: 'Привет', options: { font: 'tiny5', font_size: 16, font_width: 200 } });
+        const canvas = new OffscreenCanvas(384, wide.rows);
+        const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+        ctx.textRendering = 'geometricPrecision';
+        (await import(args.layout)).drawPlan(ctx, { blocks: wide.blocks, border: false, rows: wide.rows });
+        const alpha = runs(ctx.getImageData(0, 0, 384, wide.rows).data, 384, wide.rows);
+        const shown = runs(wide.pixels.data.map((v, i) => (i % 4 === 3 ? 255 - wide.pixels.data[i - 3] : v)), 384, wide.rows);
+        out.wide = { scale: wide.face.scaleX, alpha, shown };
+        return out;
+        """,
+        layout=LAYOUT_JS,
+    )
+    for size in (8, 16, 24):
+        found = result[str(size)]
+        assert found["ink"] and found["bad"] == 0, (size, found)
+        assert all(n % (size // 8) == 0 for n in found["lengths"]), (size, found)
+    wide = result["wide"]
+    assert wide["scale"] == 2 and wide["alpha"]["bad"] == 0, wide
+    assert wide["alpha"]["lengths"] and all(n % 4 == 0 for n in wide["alpha"]["lengths"]), wide
+    assert all(n % 4 == 0 for n in wide["shown"]["lengths"]), wide
+
+
+async def check_renderer_no_offscreen(page):
+    bare = await page.sibling(no_offscreen=True)
+    try:
+        body = """
+        const res = await go(args.note);
+        const report = await renderer.selfTest();
+        return { bytes: Array.from(res.bitmap), ok: report.ok, engine: report.engine,
+                 offscreen: typeof OffscreenCanvas, details: report.checks.filter((c) => !c.ok) };
+        """
+        plain = await run_renderer(page, body, note=NOTE)
+        without = await run_renderer(bare, body, note=NOTE)
+    finally:
+        await bare.context.browser.close()
+    assert plain["offscreen"] == "function" and without["offscreen"] == "undefined", (
+        plain,
+        without,
+    )
+    assert without["bytes"] == plain["bytes"], "bitmap differs without OffscreenCanvas"
+    assert without["ok"] is True and without["engine"]["offscreenCanvas"] is False, without
+    assert plain["engine"]["offscreenCanvas"] is True, plain
+
+
+async def check_renderer_font_failure(page):
+    file = FONTS["roboto_flex"]["file"]
+    await page.route(f"**/fonts/{file}", lambda route: route.fulfill(status=404, body="gone"))
+    result = await run_renderer(
+        page,
+        """
+        let res = null;
+        const failure = await code(async () => { res = await go(args.note); });
+        return { failure, res: res === null };
+        """,
+        note=NOTE,
+    )
+    assert result == {"failure": "font_missing", "res": True}, result
+
+
+async def check_renderer_defaults(page):
+    result = await run_renderer(page, "return r.DEFAULT_OPTIONS;")
+    assert result == STUDIO.DEFAULTS, (result, STUDIO.DEFAULTS)
+    # Preset names are validated against a literal list in index.js.
+    assert set(STUDIO.PRESETS) == {"photo", "line_art", "logo", "soft"}, STUDIO.PRESETS
+    accepted = await run_renderer(
+        page,
+        """
+        const out = {};
+        for (const name of ['photo', 'line_art', 'logo', 'soft', 'nope']) {
+          out[name] = await code(() => go(opt({ preset: name })));
+        }
+        return out;
+        """,
+    )
+    assert accepted == {
+        "photo": None,
+        "line_art": None,
+        "logo": None,
+        "soft": None,
+        "nope": "bad_document",
+    }, accepted
+
+
+SELF_TEST_NAMES = [
+    "faces_loaded",
+    "width_axis_changes_glyph_widths",
+    "weight_axis_changes_glyph_widths",
+    "render_is_deterministic",
+    "pack_roundtrip_matches_display",
+]
+
+
+async def check_renderer_self_test(page):
+    report = await run_renderer(page, "return await renderer.selfTest();")
+    assert [c["name"] for c in report["checks"]] == SELF_TEST_NAMES, report
+    assert all(c["ok"] for c in report["checks"]) and report["ok"] is True, report
+    assert report["engine"]["offscreenCanvas"] is True and report["engine"]["userAgent"], report
+    file = FONTS["roboto_flex"]["file"]
+    await page.route(f"**/fonts/{file}", lambda route: route.fulfill(status=404, body="gone"))
+    broken = await run_renderer(page, "return await renderer.selfTest();")
+    assert broken["ok"] is False and not broken["checks"][0]["ok"], broken
+    assert [c["name"] for c in broken["checks"]] == SELF_TEST_NAMES, broken
+    assert "font_missing" in broken["checks"][0]["detail"], broken
+
+
+async def check_renderer_evicted_face(page):
+    """R12: an evicted face is reloaded for the render, never replaced by a fallback font."""
+    result = await run_renderer(
+        page,
+        """
+        const doc = opt({ font_width: 60 });
+        const before = await go(doc);
+        for (const w of [30, 40, 45, 50, 55, 65, 70, 75, 80]) {
+          await renderer.faceFor({ font: 'roboto_flex', font_width: w });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20)); // the registry evicts after the task
+        const family = 'tp-roboto_flex-w60-W400';
+        const names = () => [...document.fonts].map((f) => f.family.replaceAll('"', ''));
+        const evicted = !names().includes(family);
+        const after = await go(doc);
+        return { evicted, same: same(before.bitmap, after.bitmap), back: names().includes(family) };
+        """,
+    )
+    assert result == {"evicted": True, "same": True, "back": True}, result
+
+
+async def check_renderer_stale_face_fails_loudly(page):
+    """R12: a face the registry still caches but the page no longer has is an error, not a fallback."""
+    result = await run_renderer(
+        page,
+        """
+        await go(opt({ font_width: 60 }));
+        for (const f of [...document.fonts]) {
+          if (f.family.replaceAll('"', '') === 'tp-roboto_flex-w60-W400') document.fonts.delete(f);
+        }
+        let res = null;
+        const failure = await code(async () => { res = await go(opt({ font_width: 60 })); });
+        const other = await code(() => go(opt({ font_width: 70 })));
+        return { failure, res: res === null, other };
+        """,
+    )
+    assert result == {"failure": "font_load_failed", "res": True, "other": None}, result
+
+
+async def check_renderer_pixels_reuse(page):
+    """The reused ImageData is rewritten in full: a same-height render with less ink leaves no dots."""
+    result = await run_renderer(
+        page,
+        """
+        const heavy = await go({ kind: 'text', text: 'ШШШШШШ', options: {} });
+        const light = await go({ kind: 'text', text: 'iiiiii', options: {} });
+        const expect = pack.unpack(light.bitmap, light.rows).data;
+        return { rows: [heavy.rows, light.rows], reused: light.pixels === heavy.pixels,
+                 exact: same(expect, light.pixels.data), differ: !same(heavy.bitmap, light.bitmap) };
+        """,
+    )
+    assert result["rows"][0] == result["rows"][1], result
+    assert result["reused"] and result["exact"] and result["differ"], result
+
+
+async def check_renderer_self_test_keeps_results(page):
+    """selfTest on the live Renderer must not rewrite the pixels of a result already handed out."""
+    result = await run_renderer(
+        page,
+        """
+        const held = await go(args.note);
+        const shot = Array.from(held.pixels.data);
+        const report = await renderer.selfTest();
+        return { ok: report.ok, kept: same(shot, held.pixels.data) };
+        """,
+        note=NOTE,
+    )
+    assert result == {"ok": True, "kept": True}, result
+
+
+async def check_renderer_face_for(page):
+    result = await run_renderer(
+        page,
+        """
+        const face = await renderer.faceFor({ font: 'roboto_flex', font_size: 30, font_width: 80, font_weight: 700 });
+        const res = await go(opt({ font_size: 30, font_width: 80, font_weight: 700 }));
+        return [face.family, res.face.family, face.css(30), await code(() => renderer.faceFor({ font: 'nope' }))];
+        """,
+    )
+    assert result[0] == result[1] == "tp-roboto_flex-w80-W700", result
+    assert result[2] == '30px "tp-roboto_flex-w80-W700"', result
+    assert result[3] == "bad_document", result
+
+
+def option_cases() -> list[tuple[str, dict]]:
+    bad: dict[str, list] = {
+        "fit": ["cover", "Width", 1, None],
+        "rotate": [45, 360, -90, "90", None],
+        "width": [95, 385, 200.5, "384", None],
+        "threshold": [0, 255, 128.5, "128", None],
+        "brightness": [0.24, 2.01, "1", None],
+        "contrast": [0.24, 3.01, "1", None],
+        "sharpness": [-0.01, 3.01, "1", None],
+        "columns": [0, 4, 1.5, "2", True, None],
+        "font": ["comic", "", 1, None],
+        "font_size": [11, 97, 24.5, "24", None],
+        "qr_size": [95, 361, 200.5, None],
+        "qr_correction": ["L", "m", 1, None],
+        "method": ["sobel", None],
+        "align": ["justify", None],
+        "invert": [1, "yes"],
+        "border": [0, "no"],
+        "font_width": [24, 152, 99.5, None],
+        "font_weight": [99, 1001, 400.5, None],
+        "preset": ["nope", None],
+        "unknown_key": [1],
+    }
+    cases = [(f"{key}={value!r}", {key: value}) for key, values in bad.items() for value in values]
+    tiny = {"font": "tiny5", "font_size": 16}
+    cases += [
+        ("tiny5 size 12", {**tiny, "font_size": 12}),
+        ("tiny5 size 56", {**tiny, "font_size": 56}),
+        ("tiny5 width 150", {**tiny, "font_width": 150}),
+        ("tiny5 width 50", {**tiny, "font_width": 50}),
+        ("tiny5 weight 500", {**tiny, "font_weight": 500}),
+        ("tiny5 size 20", {**tiny, "font_size": 20}),
+    ]
+    return cases
+
+
+def good_options() -> list[dict]:
+    tiny = {"font": "tiny5", "font_weight": 400}
+    return [
+        {"fit": "width"},
+        {"fit": "original"},
+        *({"rotate": r} for r in (0, 90, 180, 270)),
+        {"width": 96},
+        {"width": 384},
+        {"threshold": 1},
+        {"threshold": 254},
+        {"brightness": 0.25},
+        {"brightness": 2},
+        {"contrast": 0.25},
+        {"contrast": 3},
+        {"sharpness": 0},
+        {"sharpness": 3},
+        {"font_size": 12},
+        {"font_size": 96},
+        {"font_width": 25},
+        {"font_width": 151},
+        {"font_weight": 100},
+        {"font_weight": 1000},
+        {"qr_size": 96},
+        {"qr_size": 360},
+        *({"qr_correction": q} for q in "MQH"),
+        *({"columns": c} for c in (1, 2, 3)),
+        *({**tiny, "font_size": s} for s in (8, 16, 24, 32, 40, 48)),
+        {**tiny, "font_size": 16, "font_width": 200},
+    ]
+
+
+async def check_renderer_option_validation(page):
+    result = await run_renderer(
+        page,
+        """
+        const wrong = [];
+        for (const [label, options] of args.bad) {
+          const got = await code(() => go(opt(options)));
+          if (got !== 'bad_document') wrong.push([label, got]);
+        }
+        const refused = [];
+        for (const options of args.good) {
+          const got = await code(() => go(opt(options)));
+          if (got !== null) refused.push([options, got]);
+        }
+        // `columns` is required by layout: an explicit undefined must not fall through to it.
+        const missing = await code(() => go(opt({ columns: undefined })));
+        const noOptions = await code(() => go({ kind: 'text', text: 'x' }));
+        const badOptions = await code(() => go({ kind: 'text', text: 'x', options: [] }));
+        return { wrong, refused, missing, noOptions, badOptions };
+        """,
+        bad=option_cases(),
+        good=good_options(),
+    )
+    assert result["wrong"] == [], result["wrong"]
+    assert result["refused"] == [], result["refused"]
+    assert result["missing"] == "bad_document" and result["badOptions"] == "bad_document", result
+    assert result["noOptions"] is None, result
+
+
+async def check_renderer_field_validation(page):
+    big = "я" * 3001
+    result = await run_renderer(
+        page,
+        """
+        const t = (fields, template = 'note') => ({ kind: 'template', template, fields, options: {} });
+        const cases = {
+          nonString: t({ text: 123 }),
+          nullText: t({ text: null }),
+          longTitle: t({ title: args.big, text: 'x' }),
+          longQr: t({ qr: 'q'.repeat(501), title: 'x' }, 'qr_label'),
+          combined: t({ title: 'a'.repeat(1600), text: 'b'.repeat(1600) }),
+          blankRequired: t({ text: '   ', title: 'x' }),
+          missingRequired: t({ title: 'x' }),
+          unknownField: t({ text: 'x', nope: 'y' }),
+          fieldsArray: t(['x']),
+          fieldsString: t('x'),
+          nonStringOptional: t({ text: 'x', footer: 5 }),
+          nullOptional: t({ text: 'x', footer: null }),
+          fieldsNull: t(null),
+          pythonBlank: t({ text: '\x1f\x85 ' }),
+          kindArray: { kind: ['text'], text: 'x', options: {} },
+          kindConstructor: { kind: 'constructor', options: {} },
+          blankTextKind: { kind: 'text', text: ' ', options: {} },
+          numberTextKind: { kind: 'text', text: 7, options: {} },
+          longTextKind: { kind: 'text', text: args.big, options: {} },
+          longQrKind: { kind: 'qr', text: 'q'.repeat(501), options: {} },
+          nonStringQrKind: { kind: 'qr', text: 5, options: {} },
+          unknownKind: { kind: 'bogus', options: {} },
+          unknownKey: { kind: 'text', text: 'x', options: {}, extra: 1 },
+          nullDoc: null,
+        };
+        const out = {};
+        for (const [name, doc] of Object.entries(cases)) out[name] = await code(() => go(doc));
+        out.blankQrKind = await code(() => go({ kind: 'qr', text: '  ', options: {} }));
+        out.pythonBlankQr = await code(() => go({ kind: 'qr', text: '\x1f', options: {} }));
+        out.nullOptions = await code(() => go({ kind: 'text', text: 'x', options: null }));
+        out.limit = await code(() => go(t({ title: 'a'.repeat(1500), text: 'b'.repeat(1500) })));
+        out.astral = await code(() => go({ kind: 'text', text: '😀'.repeat(1000), options: {} }));
+        return out;
+        """,
+        big=big,
+    )
+    bad = [
+        "nonString nullText longTitle longQr combined blankRequired missingRequired unknownField",
+        "fieldsArray fieldsString nonStringOptional nullOptional fieldsNull pythonBlank blankTextKind",
+        "numberTextKind longTextKind longQrKind nonStringQrKind unknownKind unknownKey nullDoc",
+        "kindArray kindConstructor",
+    ]
+    expected = {name: "bad_document" for line in bad for name in line.split()}
+    expected |= {"blankQrKind": "blank_qr", "pythonBlankQr": "blank_qr", "nullOptions": None}
+    # 1000 emoji are within the limit (code points, not UTF-16 units); the row cap depends on the
+    # fallback emoji font, so only a validation error would be wrong.
+    assert result.pop("astral") in (None, "too_tall"), result
+    expected |= {"limit": "too_tall"}
+    assert result == expected, result
+
+
+async def check_renderer_row_cap(page):
+    result = await run_renderer(
+        page,
+        """
+        const doc = { kind: 'text', text: 'Ш'.repeat(3000), options: {} };
+        return [await code(() => go(doc)), await code(() => go(doc, { approximate: true })),
+                await code(() => go(doc, { ghost: true }))];
+        """,
+    )
+    assert result == ["too_tall"] * 3, result
+
+
+async def check_renderer_qr_500(page):
+    result = await run_renderer(
+        page,
+        """
+        const text = Array.from({ length: 500 }, (_, i) => String.fromCharCode(97 + (i * 7) % 26)).join('');
+        const big = await go({ kind: 'qr', text, options: { qr_size: 360, qr_correction: 'M' } });
+        const small = await code(() => go({ kind: 'qr', text, options: { qr_size: 96 } }));
+        const high = await code(() => go({ kind: 'qr', text, options: { qr_size: 360, qr_correction: 'H' } }));
+        const label = await go({ kind: 'template', template: 'qr_label', fields: { qr: 'https://example.com' }, options: {} });
+        return { rows: big.rows, ink: big.inkPercent > 0, small, high, qrBlock: label.blocks.some((b) => b.kind === 'qr') };
+        """,
+    )
+    assert result["rows"] > 96 and result["ink"], result
+    assert result["small"] == "qr_modules_too_small", result
+    assert result["high"] == "qr_modules_too_small", result
+    assert result["qrBlock"], result
+
+
 CHECKS = [
     ("pack: bit order and alpha threshold", check_pack_bits),
     ("pack: bytesToBase64 round-trips 98,304 bytes without a RangeError", check_base64),
@@ -2031,6 +2662,48 @@ CHECKS = [
     ("image: pixel, height and decode limits", check_image_limits),
     ("image: resized layer is cached and the cache is bounded", check_image_cache),
     ("image: presets change the bitmap", check_image_presets),
+    (
+        "renderer: two renders are byte-identical and pixels equal unpack(bitmap)",
+        check_renderer_deterministic,
+    ),
+    ("renderer: every document kind renders", check_renderer_kinds),
+    ("renderer: unknown template -> bad_document", check_renderer_unknown_template),
+    ("renderer: ghost has no bitmap but has pixels", check_renderer_ghost),
+    (
+        "renderer: ghost with approximate returns the ghost result",
+        check_renderer_ghost_wins_over_approximate,
+    ),
+    (
+        "renderer: approximate render equals the exact render at the snapped values and is flagged inexact",
+        check_renderer_approximate,
+    ),
+    ("renderer: sliders change the strip across their full ranges", check_renderer_sliders),
+    ("renderer: Tiny5 has no intermediate alpha at sizes 8, 16, 24", check_renderer_tiny5_crisp),
+    ("renderer: works without OffscreenCanvas", check_renderer_no_offscreen),
+    ("renderer: font failure fails loudly", check_renderer_font_failure),
+    ("renderer: DEFAULT_OPTIONS equals studio_render.DEFAULTS", check_renderer_defaults),
+    ("renderer: selfTest passes", check_renderer_self_test),
+    ("renderer: an evicted face is reloaded for the render", check_renderer_evicted_face),
+    (
+        "renderer: a stale face fails loudly, never a fallback font",
+        check_renderer_stale_face_fails_loudly,
+    ),
+    (
+        "renderer: reused pixels equal unpack(bitmap) after different content",
+        check_renderer_pixels_reuse,
+    ),
+    ("renderer: selfTest leaves a held result untouched", check_renderer_self_test_keeps_results),
+    ("renderer: faceFor shares the family and size of the render", check_renderer_face_for),
+    (
+        "renderer: every option range, enum and font constraint is validated",
+        check_renderer_option_validation,
+    ),
+    (
+        "renderer: field types and limits are validated before layout",
+        check_renderer_field_validation,
+    ),
+    ("renderer: the 2048 row cap gives too_tall on every path", check_renderer_row_cap),
+    ("renderer: a 500-character QR does not crash", check_renderer_qr_500),
 ]
 
 
@@ -2040,6 +2713,7 @@ async def main() -> int:
         for name in browsers():
             for title, check in CHECKS:
                 page = await open_page(p, name)
+                page.sibling = functools.partial(open_page, p, name)
                 try:
                     await check(page)
                     print(f"ok   [{name}] {title}")
