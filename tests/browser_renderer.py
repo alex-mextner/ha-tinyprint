@@ -2931,7 +2931,7 @@ async def check_state_printable(page):
         page,
         STATE_JS,
         """const bitmap = new Uint8Array(48 * 2); bitmap[5] = 1;
-        const exact = { generation: 4, exact: true, ghost: false, document: { kind: 'text' }, bitmap };
+        const exact = { generation: 4, exact: true, ghost: false, document: { kind: 'text' }, bitmap, rows: 2 };
         const view = (result, generation, pending) => m.printableResult(result, { generation, pending });
         const pixels = new ImageData(new Uint8ClampedArray(384 * 2 * 4).fill(7), 384, 2);
         const kept = m.keepResult({ ...exact, pixels });
@@ -2942,14 +2942,14 @@ async def check_state_printable(page):
           approx: view({ ...exact, exact: false, document: null }, 4, false),
           noDoc: view({ ...exact, document: null }, 4, false),
           ghost: view({ ...exact, ghost: true }, 4, false),
-          keptPixel: kept.pixels.data[0], keptSame: kept.pixels === pixels, keptBit: kept.bitmap[5],
+          keptPixels: kept.pixels, keptRows: kept.rows, keptBit: kept.bitmap[5],
           inkYes: m.bitmapHasInk(new Uint8Array([0, 0, 8])), inkNo: m.bitmapHasInk(new Uint8Array(4)),
           inkNull: m.bitmapHasInk(null),
         };""",
     )
     assert r["ok"] is True and r["older"] is None and r["inFlight"] is None and r["none"] is None, r
     assert r["approx"] is None and r["noDoc"] is None and r["ghost"] is None, r
-    assert r["keptPixel"] == 7 and r["keptSame"] is False and r["keptBit"] == 1, r
+    assert r["keptPixels"] is None and r["keptBit"] == 1 and r["keptRows"] == 2, r
     assert (r["inkYes"], r["inkNo"], r["inkNull"]) == (True, False, False), r
 
 

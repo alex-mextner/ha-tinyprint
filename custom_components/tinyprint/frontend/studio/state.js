@@ -131,14 +131,13 @@ export function printableResult(result, { generation, pending }) {
   return result;
 }
 
-/** A result safe to keep: the renderer reuses `pixels` for the next same-height render. */
+/**
+ * A result safe to keep: the renderer reuses its pixel buffer for the next same-height render, so
+ * the kept result holds a copy of the packed bytes (what Print sends) and no pixels at all; the strip
+ * is drawn from the incoming result before this is called.
+ */
 export function keepResult(result) {
-  const { pixels } = result;
-  return {
-    ...result,
-    bitmap: result.bitmap ? result.bitmap.slice() : result.bitmap,
-    pixels: pixels ? new ImageData(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height) : pixels,
-  };
+  return { ...result, bitmap: result.bitmap ? result.bitmap.slice() : result.bitmap, pixels: null };
 }
 
 export function bitmapHasInk(bitmap) {

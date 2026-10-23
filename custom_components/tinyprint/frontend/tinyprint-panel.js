@@ -147,6 +147,7 @@ class TinyPrintPanel extends HTMLElement {
         .empty { padding:54px 12px; text-align:center; max-width:270px; color:var(--secondary-text-color,#697580); font-size:14px; }
         .empty .symbol { font-size:40px; display:block; margin-bottom:12px; }
         #raster { display:block; flex:none; width:384px; max-width:none; height:auto; background:white; box-shadow:0 4px 15px #0002; image-rendering:pixelated; }
+        #raster.ghost { opacity:.55; }
         .caption { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; font-size:12px; color:var(--secondary-text-color,#697580); }
         #notice { padding:12px 15px; border-radius:9px; background:var(--secondary-background-color,#e9efee); margin:18px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
         #notice.error { border-left:4px solid var(--error-color,#be3b3b); }
@@ -283,7 +284,9 @@ class TinyPrintPanel extends HTMLElement {
   jobState(deviceId) {
     const entityId = this.printers.find(p => p.device_id === deviceId)?.entity_id ?? null;
     const stateObject = entityId ? this.hass?.states?.[entityId] : undefined;
-    return { entityId, state: stateObject?.state, inFlight: this.modules.status.jobInFlight(stateObject, this.inFlightStates) };
+    // Callable from outside before the modules have loaded: nothing is in flight yet.
+    const inFlight = Boolean(this.modules) && this.modules.status.jobInFlight(stateObject, this.inFlightStates);
+    return { entityId, state: stateObject?.state, inFlight };
   }
   refreshJob() {
     const { entityId } = this.jobState(this.$('#device').value);
@@ -412,8 +415,8 @@ class TinyPrintPanel extends HTMLElement {
     // The scheduler delivers only the newest generation; the panel still refuses anything older.
     if (result.generation !== this.scheduler.generation) return;
     this.failure = null;
+    this.drawStrip(result);
     this.lastResult = this.modules.state.keepResult(result);
-    this.drawStrip(this.lastResult);
     if (this.noticeFromRender) this.notice('');
     this.updateButtons(); this.showAction();
   }
@@ -434,9 +437,10 @@ class TinyPrintPanel extends HTMLElement {
     this.$('#empty-text').textContent = emptyText;
     this.$('#dimensions').textContent = '';
     this.$('#ink').textContent = '';
-    if (!shown) return;
+    if (!shown) { canvas.classList.remove('ghost'); return; }
     if (canvas.height !== result.rows) canvas.height = result.rows;
     canvas.getContext('2d').putImageData(result.pixels, 0, 0);
+    canvas.classList.toggle('ghost', Boolean(result.ghost));
     this.$('#dimensions').textContent = result.ghost ? 'Пример макета: введите свой текст' : `${canvas.width} × ${result.rows} точек`;
     if (!result.ghost && !result.partial) this.$('#ink').textContent = `Чёрного: ${Math.round(result.inkPercent * 100) / 100}%`;
   }

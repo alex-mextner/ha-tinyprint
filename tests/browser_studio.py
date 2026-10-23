@@ -286,6 +286,19 @@ async def check_ghost_blocks_print(p, browser):
             "title"
         )
         assert await page.evaluate(f"() => {PANEL}.lastResult.ghost === true")
+        opacity = await page.evaluate(
+            f"() => Number(getComputedStyle({PANEL}.shadowRoot.querySelector('#raster')).opacity)"
+        )
+        assert opacity < 1, opacity
+        await fill_text(page, "Ж")
+        await settle(page)
+        opacity = await page.evaluate(
+            f"() => Number(getComputedStyle({PANEL}.shadowRoot.querySelector('#raster')).opacity)"
+        )
+        assert opacity == 1, opacity
+        await fill_text(page, "")
+        await settle(page)
+        assert await page.evaluate(f"() => {PANEL}.lastResult.ghost === true")
         ink = await page.evaluate(
             f"""() => {{
               const c = {PANEL}.shadowRoot.querySelector('#raster');
@@ -301,6 +314,30 @@ async def check_ghost_blocks_print(p, browser):
         # Examples are placeholders, never values.
         assert await page.locator("#field-text").input_value() == ""
         assert await page.locator("#field-text").get_attribute("placeholder")
+
+
+async def check_kept_result_has_only_packed_bytes(p, browser):
+    async with panel(p, browser) as page:
+        await fill_text(page, "Лента")
+        await settle(page)
+        kept = await page.evaluate(
+            f"() => {{ const r = {PANEL}.lastResult; return [r.pixels, r.bitmap.length, r.rows]; }}"
+        )
+        assert kept[0] is None and kept[1] == kept[2] * 48, kept
+
+
+async def check_job_state_before_mount(p, browser):
+    page = await open_panel(p, browser, mount=False, delay_modules=400)
+    try:
+        await page.evaluate(MOUNT, False)
+        unmounted, job = await page.evaluate(
+            f"() => [{PANEL}.modules === null, {PANEL}.jobState('test-printer')]"
+        )
+        assert unmounted, "the modules loaded first: the check proves nothing"
+        assert job["entityId"] is None and job["inFlight"] is False and job.get("state") is None
+        assert not page.errors, page.errors
+    finally:
+        await page.context.browser.close()
 
 
 async def check_one_character(p, browser):
@@ -898,6 +935,12 @@ CHECKS = [
         check_initial_blockers,
         False,
     ),
+    (
+        "kept result holds the packed bytes, not the pixels",
+        check_kept_result_has_only_packed_bytes,
+        False,
+    ),
+    ("jobState works before the modules are mounted", check_job_state_before_mount, False),
     ("all blank shows a ghost and blocks Print", check_ghost_blocks_print, False),
     ("one character removes the ghost; required caption in tooltip", check_one_character, False),
     (
