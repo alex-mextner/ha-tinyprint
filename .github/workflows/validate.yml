@@ -49,8 +49,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - run: pip install Pillow==12.3.0 qrcode==8.2 playwright
-      - run: python -m playwright install --with-deps chromium
+      - run: pip install Pillow==12.3.0 qrcode==8.2 playwright opencv-python-headless numpy
+      - run: python -m playwright install --with-deps chromium firefox
+      - run: python tests/browser_renderer.py
       - run: python tests/browser_studio.py
       - uses: actions/upload-artifact@v4
         if: always()
