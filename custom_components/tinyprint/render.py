@@ -5,29 +5,23 @@ from pathlib import Path
 import qrcode
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from .fonts import DEFAULT_FONT, open_font
+
 WIDTH = 384
 MAX_ROWS = 2048
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_PIXELS = 4_000_000
-FONT_CANDIDATES = (
-    "/config/tinyprint_fonts/DejaVuSans.ttf",
-    "DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-)
 
 
 def _font(size: int, path: str | None) -> ImageFont.FreeTypeFont:
     if not 12 <= size <= 64:
         raise ValueError("Font size must be between 12 and 64")
-    for candidate in (path,) if path else FONT_CANDIDATES:
+    if path:
         try:
-            return ImageFont.truetype(candidate, size)
-        except OSError:
-            continue
-    raise ValueError(
-        "No font available. Set font_path to a readable TTF font with the required language glyphs"
-    )
+            return ImageFont.truetype(path, size)
+        except OSError as err:
+            raise ValueError(f"font_path is not a readable TTF font: {path}") from err
+    return open_font(DEFAULT_FONT, size)
 
 
 def render_text(text: str, font_size: int = 24, font_path: str | None = None) -> Image.Image:

@@ -1,25 +1,13 @@
 """Protocol vectors and rendering boundaries, independent of Home Assistant."""
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 from PIL import Image
+from shared_loader import load
 
-ROOT = Path(__file__).parents[1] / "custom_components/tinyprint"
-
-
-def module(name):
-    spec = importlib.util.spec_from_file_location(name, ROOT / f"{name}.py")
-    obj = importlib.util.module_from_spec(spec)
-    sys.modules[name] = obj
-    spec.loader.exec_module(obj)
-    return obj
-
-
-p = module("protocol")
-r = module("render")
+p = load("protocol")
+r = load("render")
 
 
 @pytest.mark.parametrize(
@@ -232,3 +220,22 @@ def test_corrupt_image_decoding_is_validation_error(tmp_path, monkeypatch, failu
     monkeypatch.setattr(r.Image, "open", broken_open)
     with pytest.raises(ValueError, match="readable image"):
         r.render_image(str(path))
+
+
+def test_render_text_never_opens_a_system_font(recorded_font_paths):
+    bundled = Path(r.__file__).parent / "frontend" / "fonts"
+    r.render_text("Привет, мир", 24)
+    assert recorded_font_paths
+    assert all(Path(path).parent == bundled for path in recorded_font_paths)
+    recorded_font_paths.clear()
+    explicit = str(bundled / "Tiny5-Regular.ttf")
+    r.render_text("Привет, мир", 24, font_path=explicit)
+    assert recorded_font_paths == [explicit]
+
+
+def test_render_text_size_range_is_still_12_to_64():
+    for size in (11, 65):
+        with pytest.raises(ValueError):
+            r.render_text("x", size)
+    for size in (12, 64):
+        assert r.render_text("x", size).width == r.WIDTH
