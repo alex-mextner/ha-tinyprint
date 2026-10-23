@@ -194,9 +194,9 @@ function textPart(field, text, size, align, checklist, face, ctx, columns = 1) {
   const inset = checklist ? CHECK_INSET : MARGIN;
   ctx.font = face.css(size);
   const measure = (s) => ctx.measureText(s).width * face.scaleX;
-  // The wrap width of a newspaper column is its width less the checklist's checkbox indent.
+  // A column is its width less the checklist's checkbox indent; one column is the whole text band.
   const colW = columnWidth(columns);
-  const wrapWidth = columns === 1 ? WIDTH - inset - MARGIN : colW - (checklist ? CHECK_INDENT : 0);
+  const wrapWidth = colW - (checklist ? CHECK_INDENT : 0);
   const wrapped = wrapText(measure, text, wrapWidth, { checklist });
   const widths = wrapped.map((line) => measure(line.text));
   const part = {
@@ -316,7 +316,7 @@ function documentParts(document, face, ctx, templates, qrModules) {
     throw new RenderError('bad_document', 'document needs complete options');
   }
   const size = options.font_size;
-  const columns = options.columns ?? 1;
+  const { columns } = options; // options are complete, so there is no default to fall back to
   if (!COLUMN_COUNTS.has(columns)) {
     throw new RenderError('bad_document', 'columns must be 1, 2 or 3');
   }

@@ -952,7 +952,7 @@ async def check_columns_tallest_minimal(page):
     cases = [(items, n) for items in lists for n in (2, 3)]
     assert len(flowed) == len(cases)
     for (items, n), got in zip(cases, flowed, strict=True):
-        assert tallest(got) == tallest(brute_flow(items, n)), (items, n, got)
+        assert got == brute_flow(items, n), (items, n, got)
 
 
 async def check_columns_ties(page):
@@ -1245,6 +1245,91 @@ async def check_columns_blank_slot(page):
     assert slot["y"] == result["y"], result
 
 
+# JSON cannot carry NaN or undefined: those two travel as labels and are built page-side.
+COLUMN_VALUES = [
+    ("1", 1),
+    ("2", 2),
+    ("3", 3),
+    ("4", 4),
+    ("0", 0),
+    ("-1", -1),
+    ("'2'", "2"),
+    ("2.5", 2.5),
+    ("null", None),
+    ("true", True),
+    ("NaN", None),
+    ("undefined", None),
+]
+
+
+async def check_columns_invalid_count(page):
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const outcomes = {};
+        for (const [label, value] of args.values) {
+          const doc = structuredClone(args.doc);
+          if (label === 'NaN') doc.options.columns = NaN;
+          else if (label === 'undefined') delete doc.options.columns;
+          else doc.options.columns = value;
+          try {
+            const p = await plan(doc);
+            outcomes[label] = { columns: mainOf(p).columns?.length ?? 1 };
+          } catch (error) {
+            outcomes[label] = { code: error.code, isRenderError: error instanceof RenderError };
+          }
+        }
+        return outcomes;
+        """,
+        values=COLUMN_VALUES,
+        doc=column_doc(1, "один\nдва\nтри\nчетыре"),
+    )
+    for count in (1, 2, 3):
+        assert result[str(count)] == {"columns": count}, (count, result)
+    for label, _ in COLUMN_VALUES[3:]:
+        assert result[label] == {"code": "bad_document", "isRenderError": True}, (label, result)
+
+
+async def check_columns_row_cap(page):
+    size, lines = row_cap_boundary()
+    result = await run_layout(
+        page,
+        COLUMN_HELPERS
+        + """
+        const outcome = async (columns, count) => {
+          const doc = { ...args.doc, options: { ...args.doc.options, columns } };
+          doc.fields = { text: Array(count).fill('строка').join('\\n') };
+          try {
+            const p = await plan(doc);
+            const block = mainOf(p);
+            return { rows: p.rows, tallest: Math.max(...(block.columns ?? [block]).map((c) => c.lines.length)) };
+          } catch (error) {
+            return { code: error.code };
+          }
+        };
+        const out = {};
+        for (const n of [2, 3]) out[n] = [await outcome(n, n * args.lines), await outcome(n, n * args.lines + 1)];
+        out.single = await outcome(1, 3 * args.lines);
+        return out;
+        """,
+        doc=normalized(
+            {
+                "kind": "template",
+                "template": "note",
+                "fields": {"text": "x"},
+                "options": {"font_size": size},
+            }
+        ),
+        lines=lines,
+    )
+    # The tallest column sets the height: n * lines items fill n columns to exactly 2048 rows, one
+    # more makes the tallest column a line too tall, and the same items in one column are too tall.
+    for n in ("2", "3"):
+        assert result[n] == [{"rows": 2048, "tallest": lines}, {"code": "too_tall"}], (n, result)
+    assert result["single"] == {"code": "too_tall"}, result
+
+
 CHECKS = [
     ("pack: bit order and alpha threshold", check_pack_bits),
     ("pack: bytesToBase64 round-trips 98,304 bytes without a RangeError", check_base64),
@@ -1307,6 +1392,8 @@ CHECKS = [
         check_columns_alignment_and_gutter,
     ),
     ("columns: a blank main text slot sits in the first column", check_columns_blank_slot),
+    ("columns: only the integers 1, 2 and 3 are accepted", check_columns_invalid_count),
+    ("columns: the row cap applies to the tallest column", check_columns_row_cap),
 ]
 
 
