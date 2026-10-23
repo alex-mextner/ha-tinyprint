@@ -15,17 +15,13 @@ from typing import Any, Callable
 import qrcode
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
+from .fonts import DEFAULT_FONT, derived_size, font_entry, open_font
+
 WIDTH = 384
 MAX_ROWS = 2048
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_PIXELS = 4_000_000
 MAX_BASE64 = 4 * ((MAX_FILE_BYTES + 2) // 3)
-FONT_CANDIDATES = (
-    "/config/tinyprint_fonts/DejaVuSans.ttf",
-    "DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-)
 TEMPLATES = {
     "note": {
         "name": "Заметка",
@@ -128,7 +124,11 @@ DEFAULTS = {
     "invert": False,
     "width": 384,
     "fit": "width",
+    "font": DEFAULT_FONT,
     "font_size": 24,
+    "font_width": 100,
+    "font_weight": 400,
+    "columns": 1,
     "align": "left",
     "border": False,
     "qr_size": 320,
@@ -149,7 +149,6 @@ def normalize_options(raw: Any = None) -> dict[str, Any]:
         raise ValueError("Unknown image preset")
     out = DEFAULTS | {k: v for k, v in PRESETS[preset].items() if k != "name"} | raw
     ranges = {
-        "font_size": (12, 48),
         "width": (96, 384),
         "threshold": (1, 254),
         "qr_size": (96, 360),
@@ -166,8 +165,9 @@ def normalize_options(raw: Any = None) -> dict[str, Any]:
             or not low <= value <= high
         ):
             raise ValueError(f"{key} must be between {low} and {high}")
-        if key in {"font_size", "width", "threshold", "qr_size"} and not isinstance(value, int):
+        if key in {"width", "threshold", "qr_size"} and not isinstance(value, int):
             raise ValueError(f"{key} must be an integer")
+    _check_font_options(out)
     choices = {
         "method": ("threshold", "floyd_steinberg", "ordered"),
         "rotate": (0, 90, 180, 270),
@@ -184,6 +184,41 @@ def normalize_options(raw: Any = None) -> dict[str, Any]:
     return out
 
 
+def _is_int(value: Any) -> bool:
+    return type(value) is int
+
+
+def _check_font_options(out: dict[str, Any]) -> None:
+    """Validate font, size, axes and columns against the chosen font's own limits."""
+    entry = font_entry(out["font"])
+    size, width, weight = out["font_size"], out["font_width"], out["font_weight"]
+    sizes = entry["sizes"]
+    if "values" in sizes:
+        if not _is_int(size) or size not in sizes["values"]:
+            raise ValueError(f"font_size must be one of {', '.join(map(str, sizes['values']))}")
+    elif not _is_int(size) or not sizes["min"] <= size <= sizes["max"]:
+        raise ValueError(f"font_size must be between {sizes['min']} and {sizes['max']}")
+    spec = entry["width"]
+    if spec["kind"] == "axis":
+        if not _is_int(width) or not spec["min"] <= width <= spec["max"]:
+            raise ValueError(f"font_width must be between {spec['min']} and {spec['max']}")
+    elif not _is_int(width) or width not in spec["values"]:
+        raise ValueError(f"font_width must be one of {', '.join(map(str, spec['values']))}")
+    elif width != spec["default"]:
+        raise ValueError(f"font_width {width} is available only in the Studio editor")
+    spec = entry["weight"]
+    if spec["kind"] == "axis":
+        if not _is_int(weight) or not spec["min"] <= weight <= spec["max"]:
+            raise ValueError(f"font_weight must be between {spec['min']} and {spec['max']}")
+    elif weight != spec["value"] or not _is_int(weight):
+        raise ValueError(f"font_weight must be {spec['value']} for this font")
+    columns = out["columns"]
+    if not _is_int(columns) or columns not in (1, 2, 3):
+        raise ValueError("columns must be 1, 2 or 3")
+    if columns != 1:
+        raise ValueError("columns 2 and 3 are available only in the Studio editor")
+
+
 def _text(value: Any, limit: int = 3000, required: bool = False) -> str:
     if not isinstance(value, str) or len(value) > limit or (required and not value.strip()):
         raise ValueError(
@@ -192,21 +227,25 @@ def _text(value: Any, limit: int = 3000, required: bool = False) -> str:
     return value
 
 
-def _font(size: int, path: str | None) -> ImageFont.FreeTypeFont:
-    for candidate in (path,) if path else FONT_CANDIDATES:
+def _font(size: int, options: dict[str, Any], path: str | None) -> ImageFont.FreeTypeFont:
+    # A configured font file is opened as-is: font/width/weight options do not apply to it.
+    if path:
         try:
-            return ImageFont.truetype(candidate, size)
-        except OSError:
-            continue
-    raise ValueError(
-        "No Unicode font available; configure a readable TTF/OTF font in TinyPrint options"
-    )
+            return ImageFont.truetype(path, size)
+        except OSError as err:
+            raise ValueError(f"Cannot open the configured font file {path}") from err
+    return open_font(options["font"], size, options["font_width"], options["font_weight"])
 
 
 def _text_block(
-    text: str, size: int, align: str, font_path: str | None, checklist: bool = False
+    text: str,
+    size: int,
+    align: str,
+    options: dict[str, Any],
+    font_path: str | None,
+    checklist: bool = False,
 ) -> Image.Image:
-    font = _font(size, font_path)
+    font = _font(size, options, font_path)
     ascent, descent = font.getmetrics()
     step = ascent + descent + 5
     inset = 34 if checklist else 10
@@ -302,27 +341,30 @@ def _label(
         _text(fields.get(key, ""), 500 if key == "qr" else 3000, key in spec["required"])
     if sum(len(v) for k, v in fields.items() if k != "qr") > 3000:
         raise ValueError("Combined label text exceeds 3000 characters")
-    size = options["font_size"]
+    size, face = options["font_size"], options["font"]
     parts = []
     if title := fields.get("title"):
+        role = "heading" if template == "heading" else "title"
         parts.append(
-            _text_block(
-                title, min(64, size + (14 if template == "heading" else 6)), "center", font_path
-            )
+            _text_block(title, derived_size(face, role, size), "center", options, font_path)
         )
     if location := fields.get("location"):
-        parts.append(_text_block(location, size, options["align"], font_path))
+        parts.append(_text_block(location, size, options["align"], options, font_path))
     if template == "spool_label":
         names = {"material": "Материал", "color": "Цвет", "weight": "Остаток", "nozzle": "Сопло"}
         rows = [f"{name}: {fields[key]}" for key, name in names.items() if fields.get(key)]
         if rows:
-            parts.append(_text_block("\n".join(rows), size, options["align"], font_path))
+            parts.append(_text_block("\n".join(rows), size, options["align"], options, font_path))
     if text := fields.get("text"):
-        parts.append(_text_block(text, size, options["align"], font_path, template == "checklist"))
+        parts.append(
+            _text_block(text, size, options["align"], options, font_path, template == "checklist")
+        )
     if data := fields.get("qr"):
         parts.append(_qr(data, options))
     if footer := fields.get("footer"):
-        parts.append(_text_block(footer, max(12, size - 4), "center", font_path))
+        parts.append(
+            _text_block(footer, derived_size(face, "footer", size), "center", options, font_path)
+        )
     return _stack(parts, options["border"])
 
 
@@ -451,7 +493,7 @@ def render_document(
     if kind == "text":
         text = _text(document.get("text"), required=True)
         return _stack(
-            [_text_block(text, options["font_size"], options["align"], font_path)],
+            [_text_block(text, options["font_size"], options["align"], options, font_path)],
             options["border"],
         )
     return _label(document.get("template"), document.get("fields", {}), options, font_path)

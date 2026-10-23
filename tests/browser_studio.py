@@ -5,7 +5,6 @@ Run: python tests/browser_studio.py
 """
 
 import asyncio
-import importlib.util
 import json
 import os
 import sys
@@ -15,12 +14,10 @@ from PIL import Image
 from playwright.async_api import async_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location(
-    "studio_render", ROOT / "custom_components/tinyprint/studio_render.py"
-)
-renderer = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = renderer
-spec.loader.exec_module(renderer)
+sys.path.insert(0, str(Path(__file__).parent))
+from shared_loader import load  # noqa: E402
+
+renderer = load("studio_render")
 
 HTML = """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TinyPrint | Test harness</title><style>body{margin:0;font-family:system-ui}.test-banner{font-size:11px;text-align:center;padding:5px;background:#fff2cc;color:#4c3900}tinyprint-panel{height:calc(100vh - 28px)}</style><div class="test-banner">TEST HARNESS · интерфейс и рендерер настоящие · не рабочий HA и не проверка бумажной печати</div><tinyprint-panel></tinyprint-panel></html>"""
 
