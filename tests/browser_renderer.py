@@ -4,6 +4,8 @@ Run: python tests/browser_renderer.py
 """
 
 import asyncio
+import base64
+import io
 import itertools
 import json
 import random
@@ -12,6 +14,7 @@ import sys
 from pathlib import Path
 
 import qrcode
+from PIL import Image
 from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -25,6 +28,7 @@ PACK = f"{STATIC}renderer/pack.js"
 FONTS_JS = f"{STATIC}renderer/fonts.js"
 LAYOUT_JS = f"{STATIC}renderer/layout.js"
 QR_JS = f"{STATIC}renderer/qr.js"
+IMAGE_JS = f"{STATIC}renderer/image.js"
 VENDOR_QR_JS = f"{STATIC}vendor/qrcodegen.js"
 STUDIO = load("studio_render")
 
@@ -1638,6 +1642,307 @@ async def check_qr_too_small(page):
     ], result
 
 
+def png_bytes(image: Image.Image) -> list[int]:
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return list(out.getvalue())
+
+
+def gradient_image(width: int, height: int) -> Image.Image:
+    rng = random.Random(5)
+    image = Image.new("L", (width, height))
+    image.putdata(
+        [
+            min(255, max(0, x * 255 // (width - 1) + rng.randrange(-20, 21)))
+            for _ in range(height)
+            for x in range(width)
+        ]
+    )
+    return image
+
+
+def image_options(**overrides) -> dict:
+    return {
+        "rotate": 0,
+        "width": 384,
+        "fit": "width",
+        "brightness": 1,
+        "contrast": 1,
+        "sharpness": 1,
+        "invert": False,
+        "method": "threshold",
+        "threshold": 128,
+    } | overrides
+
+
+IMAGE_PRELUDE = """
+const m = await import(args.url);
+const pack = await import(args.pack);
+const bytes = (list) => new Blob([Uint8Array.from(list)]);
+const decode = async (list) => m.decodeUpload(bytes(list));
+const run = async (list, opts) => m.processImage(await decode(list), opts);
+const inkCount = (r) => r.ink.reduce((a, b) => a + b, 0);
+const code = async (fn) => { try { await fn(); return null; } catch (e) { return e.code ?? String(e); } };
+"""
+
+
+async def run_image(page, body: str, **extra):
+    return await page.evaluate(
+        "async (args) => {" + IMAGE_PRELUDE + body + "}",
+        {"url": IMAGE_JS, "pack": PACK, **extra},
+    )
+
+
+async def check_image_dither_exact(page):
+    """No resize happens (fit original, width == source width): Pillow's bits must be reproduced."""
+    source = gradient_image(100, 60)
+    data = png_bytes(source)
+    plain = {"brightness": 1.0, "contrast": 1.0, "sharpness": 1.0}
+    cases = [
+        {**plain, "method": "threshold", "threshold": 100},
+        {**plain, "method": "threshold", "threshold": 180},
+        {**plain, "method": "floyd_steinberg", "threshold": 90},
+        {**plain, "method": "floyd_steinberg", "threshold": 128},
+        {**plain, "method": "ordered", "threshold": 140},
+        {**plain, "method": "ordered", "threshold": 128},
+        {**plain, "method": "ordered", "threshold": 128, "invert": True},
+        {**plain, "method": "floyd_steinberg", "threshold": 128, "invert": True},
+    ]
+    for preset in ("photo", "line_art", "logo", "soft"):
+        cases.append(
+            {
+                k: v
+                for k, v in STUDIO.normalize_options({"preset": preset}).items()
+                if k in image_options()
+            }
+            | {"width": 100, "fit": "original", "rotate": 0}
+        )
+    b64 = base64.b64encode(bytes(data)).decode()
+    expected = []
+    for case in cases:
+        options = image_options(**case) | {"width": 100, "fit": "original"}
+        bits, rows = STUDIO.bitmap(
+            STUDIO.render_document({"kind": "image", "image_base64": b64, "options": options})
+        )
+        expected.append((list(bits), rows))
+    result = await run_image(
+        page,
+        """
+        const out = [];
+        const src = await decode(args.data);
+        for (const c of args.cases) {
+          const r = m.processImage(src, c);
+          out.push([Array.from(pack.packInk(r.ink, r.rows)), r.rows]);
+        }
+        return out;
+        """,
+        data=data,
+        cases=[image_options(**c) | {"width": 100, "fit": "original"} for c in cases],
+    )
+    for i, (got, want) in enumerate(zip(result, expected, strict=True)):
+        assert got[1] == want[1], (i, cases[i], got[1], want[1])
+        diff = sum(a != b for a, b in zip(got[0], want[0], strict=True))
+        assert diff == 0, (i, cases[i], diff)
+
+
+async def check_image_flat_gray(page):
+    data = png_bytes(Image.new("L", (100, 100), 128))
+    result = await run_image(
+        page,
+        """
+        const out = {};
+        for (const method of ['floyd_steinberg', 'ordered']) {
+          const r = await run(args.data, { ...args.opts, method, width: 100, fit: 'original' });
+          out[method] = inkCount(r) / (100 * 100);
+        }
+        return out;
+        """,
+        data=data,
+        opts=image_options(),
+    )
+    for method, share in result.items():
+        assert 0.45 <= share <= 0.55, (method, share)
+
+
+async def check_image_threshold_monotonic(page):
+    data = png_bytes(gradient_image(360, 240))
+    result = await run_image(
+        page,
+        """
+        const src = await decode(args.data);
+        const out = [];
+        for (let t = 32; t <= 224; t += 32) out.push(inkCount(m.processImage(src, { ...args.opts, threshold: t })));
+        return out;
+        """,
+        data=data,
+        opts=image_options(),
+    )
+    assert result == sorted(result) and result[0] < result[-1], result
+
+
+async def check_image_transparent(page):
+    data = png_bytes(Image.new("RGBA", (64, 64), (0, 0, 0, 0)))
+    result = await run_image(
+        page, "return inkCount(await run(args.data, args.opts));", data=data, opts=image_options()
+    )
+    assert result == 0, result
+
+
+def exif_jpeg() -> list[int]:
+    image = Image.new("RGB", (100, 50), (0, 0, 0))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    out = io.BytesIO()
+    image.save(out, "JPEG", exif=exif, quality=95)
+    return list(out.getvalue())
+
+
+async def check_image_exif(page):
+    data = exif_jpeg()
+    result = await run_image(
+        page,
+        """
+        const columns = (r) => {
+          const used = new Set();
+          for (let i = 0; i < r.ink.length; i += 1) if (r.ink[i]) used.add(i % 384);
+          return [Math.min(...used), Math.max(...used)];
+        };
+        const fit = await run(args.data, args.opts);
+        const original = await run(args.data, { ...args.opts, fit: 'original' });
+        return { fit: fit.rows, original: original.rows, span: columns(original) };
+        """,
+        data=data,
+        opts=image_options(),
+    )
+    assert result["fit"] == 768, result
+    # The stored 100x50 is shown as 50x100: 100 rows, 50 columns centred on the 384 dots.
+    assert result["original"] == 100 and result["span"] == [167, 216], result
+
+
+async def check_image_rotation(page):
+    image = Image.new("RGB", (40, 20), "white")
+    image.putpixel((0, 0), (0, 0, 0))
+    data = png_bytes(image)
+    result = await run_image(
+        page,
+        """
+        const where = (r) => {
+          const i = r.ink.indexOf(1);
+          return [i % 384, Math.floor(i / 384), inkCount(r), r.rows];
+        };
+        const out = {};
+        for (const rotate of [0, 90, 180, 270]) {
+          out[rotate] = where(await run(args.data, { ...args.opts, rotate, fit: 'original' }));
+        }
+        return out;
+        """,
+        data=data,
+        opts=image_options(),
+    )
+    # 40x20 is centred at x0 = 172, 20x40 at x0 = 182.
+    assert result["0"] == [172, 0, 1, 20], result
+    assert result["90"] == [182 + 19, 0, 1, 40], result
+    assert result["180"] == [172 + 39, 19, 1, 20], result
+    assert result["270"] == [182, 39, 1, 40], result
+
+
+async def check_image_invert(page):
+    data = png_bytes(Image.new("L", (64, 64), 0))
+    result = await run_image(
+        page,
+        """
+        return [inkCount(await run(args.data, args.opts)), inkCount(await run(args.data, { ...args.opts, invert: true }))];
+        """,
+        data=data,
+        opts=image_options(fit="original"),
+    )
+    assert result == [64 * 64, 0], result
+
+
+async def check_image_upload_cap(page):
+    result = await run_image(
+        page,
+        """
+        let calls = 0;
+        const real = window.createImageBitmap;
+        window.createImageBitmap = (...a) => { calls += 1; return real(...a); };
+        const big = new Blob([new Uint8Array(2 * 1024 * 1024 + 1)]);
+        const first = await code(() => m.decodeUpload(big));
+        const countAfterBig = calls;
+        window.createImageBitmap = real;
+        return [first, countAfterBig];
+        """,
+    )
+    assert result == ["image_too_large", 0], result
+
+
+async def check_image_limits(page):
+    result = await run_image(
+        page,
+        """
+        return [
+          await code(() => decode(args.huge)),
+          await code(() => run(args.tall, args.opts)),
+          await code(() => decode(args.junk)),
+          await code(() => decode([])),
+        ];
+        """,
+        huge=png_bytes(Image.new("L", (2001, 2001), 255)),
+        tall=png_bytes(Image.new("L", (50, 1000), 255)),
+        junk=list(b"this is not an image" * 8),
+        opts=image_options(),
+    )
+    assert result == ["image_too_large", "too_tall", "image_unreadable", "image_unreadable"], result
+
+
+async def check_image_cache(page):
+    data = png_bytes(gradient_image(200, 100))
+    result = await run_image(
+        page,
+        """
+        const src = await decode(args.data);
+        const layer = (o) => m.processImage(src, { ...args.opts, ...o }).layer;
+        const out = [];
+        out.push(layer({}));
+        out.push(layer({ threshold: 90 }));
+        out.push(layer({ method: 'ordered', brightness: 1.3, invert: true }));
+        out.push(layer({ width: 300 }));
+        out.push(layer({ rotate: 90 }));
+        out.push(layer({ fit: 'original' }));
+        out.push(layer({}));
+        // Bounded: more distinct layers than the LRU holds evicts the oldest.
+        for (const width of [101, 102, 103, 104, 105, 106]) layer({ width });
+        out.push(layer({ width: 101 }));
+        out.push(layer({ width: 106 }));
+        return out;
+        """,
+        data=data,
+        opts=image_options(),
+    )
+    assert result == ["miss", "hit", "hit", "miss", "miss", "miss", "hit", "miss", "hit"], result
+
+
+async def check_image_presets(page):
+    data = png_bytes(gradient_image(360, 240))
+    keys = image_options().keys()
+    sets = {
+        name: {k: v for k, v in STUDIO.normalize_options({"preset": name}).items() if k in keys}
+        for name in ("photo", "line_art")
+    }
+    result = await run_image(
+        page,
+        """
+        const src = await decode(args.data);
+        const bits = (o) => { const r = m.processImage(src, o); return Array.from(pack.packInk(r.ink, r.rows)).join(); };
+        return [bits(args.photo), bits(args.line_art)];
+        """,
+        data=data,
+        photo=sets["photo"],
+        line_art=sets["line_art"],
+    )
+    assert result[0] != result[1], "photo and line_art produced the same bitmap"
+
+
 CHECKS = [
     ("pack: bit order and alpha threshold", check_pack_bits),
     ("pack: bytesToBase64 round-trips 98,304 bytes without a RangeError", check_base64),
@@ -1712,6 +2017,20 @@ CHECKS = [
     ("qr: integer module scaling and quiet zone", check_qr_scaling),
     ("qr: data beyond version-40 capacity raises qr_too_long", check_qr_too_long),
     ("qr: too small modules raise", check_qr_too_small),
+    (
+        "image: threshold, dithers and enhancement equal Pillow without resizing",
+        check_image_dither_exact,
+    ),
+    ("image: flat mid-gray dithers to about half ink", check_image_flat_gray),
+    ("image: threshold ink is non-decreasing in the threshold", check_image_threshold_monotonic),
+    ("image: transparent pixels become white", check_image_transparent),
+    ("image: EXIF orientation is applied", check_image_exif),
+    ("image: rotation is clockwise", check_image_rotation),
+    ("image: invert turns a black square white", check_image_invert),
+    ("image: an upload over 2 MiB is rejected before decoding", check_image_upload_cap),
+    ("image: pixel, height and decode limits", check_image_limits),
+    ("image: resized layer is cached and the cache is bounded", check_image_cache),
+    ("image: presets change the bitmap", check_image_presets),
 ]
 
 
