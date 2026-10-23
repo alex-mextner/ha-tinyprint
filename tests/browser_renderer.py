@@ -2134,8 +2134,12 @@ async def check_renderer_approximate(page):
           equal: same(approx.bitmap, snapped.bitmap),
           differs: !same(exact.bitmap, snapped.bitmap),
           flags: [approx.exact, snapped.exact, exact.exact, onGrid.exact],
-          used: [approx.document.options.font_width, approx.document.options.font_weight],
+          used: [approx.snapped.width, approx.snapped.weight],
+          onGridUsed: [onGrid.snapped.width, onGrid.snapped.weight],
+          approxDocuments: [approx.document, onGrid.document],
+          exactSnapped: [exact.snapped, snapped.snapped],
           requested: [exact.document.options.font_width, exact.document.options.font_weight],
+          bitmaps: [approx.bitmap instanceof Uint8Array, onGrid.bitmap instanceof Uint8Array],
           keys: Object.keys(approx),
           snap: [r.snapToGrid(475, 50, 100, 1000), r.snapToGrid(474, 50, 100, 1000),
                  r.snapToGrid(0, 5, 25, 151), r.snapToGrid(999, 50, 100, 1000),
@@ -2147,6 +2151,10 @@ async def check_renderer_approximate(page):
     assert result["equal"] and result["differs"], result
     assert result["flags"] == [False, True, True, False], result
     assert result["used"] == [35, 500] and result["requested"] == [37, 480], result
+    assert result["onGridUsed"] == [35, 500] and result["bitmaps"] == [True, True], result
+    # R15: nothing a recipe could be built from leaves an inexact render.
+    assert result["approxDocuments"] == [None, None], result
+    assert result["exactSnapped"] == [None, None], result
     assert "bytes" not in result["keys"] and "packed" not in result["keys"], result
     assert result["snap"] == [500, 450, 25, 1000, 150, 25, 35], result
     assert result["steps"] == [5, 50], result
@@ -2409,6 +2417,116 @@ async def check_renderer_dispose_in_flight(page):
         "face": "font_load_failed",
         "left": 0,
     }, after
+
+
+async def check_renderer_overlapping_renders(page):
+    """Unawaited renders interleave at the face awaits: each keeps its generation and its bits."""
+    example = STUDIO.TEMPLATES["note"]["example"]
+    result = await run_renderer(
+        page,
+        """
+        const docs = [
+          opt({ font_width: 60 }),                       // uncached face: resolves last
+          opt({}),
+          args.note,
+          { kind: 'qr', text: 'https://example.com', options: { qr_size: 200 } },
+          { kind: 'template', template: 'note', fields: args.example, options: {} },
+        ];
+        const modes = [{}, {}, {}, {}, { ghost: true }];
+        const batch = (n) => docs.slice(0, n).map((doc, i) => go(doc, { generation: 100 + i, ...modes[i] }));
+        const out = {};
+        for (const n of [2, 5]) {
+          const results = await Promise.all(batch(n));
+          // Independent copies: bitmaps are fresh arrays, taken before anything renders again.
+          const bits = results.map((r) => (r.bitmap ? Array.from(r.bitmap) : null));
+          const buffers = new Set(results.filter((r) => r.bitmap).map((r) => r.bitmap.buffer));
+          const sequential = [];
+          for (let i = 0; i < n; i += 1) {
+            const r = await go(docs[i], { generation: 7, ...modes[i] });
+            sequential.push(r.bitmap ? Array.from(r.bitmap) : null);
+          }
+          out[n] = {
+            generations: results.map((r) => r.generation),
+            ghosts: results.map((r) => r.ghost),
+            equal: bits.map((b, i) => (b === null ? sequential[i] === null : same(b, sequential[i]))),
+            distinctBuffers: buffers.size === results.filter((r) => r.bitmap).length,
+            ink: results.map((r) => r.inkPercent > 0 || r.ghost),
+          };
+        }
+        // Documented reuse: same-height exact results share one ImageData, only the newest is valid.
+        const line = (text) => ({ kind: 'text', text, options: {} });
+        const [a, b] = await Promise.all([go(line('ЫЫЫЫЫЫ')), go(line('iiiiii'))]);
+        out.reuse = {
+          sameHeight: a.rows === b.rows,
+          shared: a.pixels === b.pixels,
+          newestValid: same(b.pixels.data, pack.unpack(b.bitmap, b.rows).data),
+          bitmapsIndependent: a.bitmap.buffer !== b.bitmap.buffer && !same(a.bitmap, b.bitmap),
+        };
+        return out;
+        """,
+        example=example,
+        note=NOTE,
+    )
+    for n in ("2", "5"):
+        out = result[n]
+        assert out["generations"] == [100 + i for i in range(int(n))], result
+        assert all(out["equal"]) and out["distinctBuffers"] and all(out["ink"]), (n, result)
+    assert result["5"]["ghosts"] == [False, False, False, False, True], result
+    reuse = result["reuse"]
+    assert reuse["sameHeight"] and reuse["shared"] and reuse["newestValid"], reuse
+    assert reuse["bitmapsIndependent"], reuse
+
+
+async def check_renderer_impostor_face(page):
+    """R12: liveness is the Renderer's own FontFace instance, not any FontFace of the same family.
+
+    Known limit: the page picks by family name, so an impostor registered while the Renderer's own
+    face is still live can be the one the canvas uses; only a family name nobody else can produce
+    would exclude that.
+    """
+    result = await run_renderer(
+        page,
+        """
+        const family = 'tp-roboto_flex-w60-W400';
+        const names = () => [...document.fonts].filter((f) => f.family.replaceAll('"', '') === family);
+        const impostor = async () => {
+          const font = new FontFace(family, await (await fetch(new URL('fonts/RobotoFlex.ttf', args.base))).arrayBuffer());
+          await font.load();
+          document.fonts.add(font);
+          return font;
+        };
+        const doc = opt({ font_width: 60 });
+        const first = await go(doc);
+        const own = first.face.fontFace;
+        // 1. The registry still caches the face, the page lost it, an impostor took its place.
+        document.fonts.delete(own);
+        const fake = await impostor();
+        let res = null;
+        const stale = await code(async () => { res = await go(doc); });
+        // 2. The registry evicted the face for real: the render reloads and draws with its own copy.
+        document.fonts.delete(fake);
+        for (const w of [30, 40, 45, 50, 55, 65, 70, 75, 80]) await renderer.faceFor({ font: 'roboto_flex', font_width: w });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const fake2 = await impostor();
+        const again = await go(doc);
+        // Same family name: the page itself may prefer the impostor, so compare once it is gone.
+        document.fonts.delete(fake2);
+        const clean = await go(doc);
+        return {
+          stale, staleResult: res === null,
+          reloaded: again.face.fontFace !== fake2 && again.face.fontFace !== own,
+          registered: document.fonts.has(again.face.fontFace) && again.face.fontFace.status === 'loaded',
+          same: same(first.bitmap, clean.bitmap) && clean.face.fontFace === again.face.fontFace,
+        };
+        """,
+    )
+    assert result == {
+        "stale": "font_load_failed",
+        "staleResult": True,
+        "reloaded": True,
+        "registered": True,
+        "same": True,
+    }, result
 
 
 async def check_renderer_face_for(page):
@@ -2729,6 +2847,14 @@ CHECKS = [
     ),
     ("renderer: selfTest leaves a held result untouched", check_renderer_self_test_keeps_results),
     ("renderer: dispose during a render leaves no FontFace", check_renderer_dispose_in_flight),
+    (
+        "renderer: overlapping renders keep their generation and their own bits",
+        check_renderer_overlapping_renders,
+    ),
+    (
+        "renderer: a FontFace of the same family is not mistaken for the Renderer's own",
+        check_renderer_impostor_face,
+    ),
     ("renderer: faceFor shares the family and size of the render", check_renderer_face_for),
     (
         "renderer: every option range, enum and font constraint is validated",

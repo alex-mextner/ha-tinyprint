@@ -88,6 +88,7 @@ export class FaceRegistry {
       }
       // Parse before registering: a face that fails here must leave nothing in document.fonts.
       const face = makeFace(family, buffer, entry);
+      face.fontFace = fontFace; // the instance the page registered: callers check it is still there
       document.fonts.add(fontFace);
       if (!document.fonts.has(fontFace)) {
         throw new RenderError('font_load_failed', `font ${entry.file} was not registered`);

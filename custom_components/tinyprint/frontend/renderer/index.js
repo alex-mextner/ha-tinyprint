@@ -1,6 +1,6 @@
 // Browser renderer: validates a document, plans and draws it on a canvas and packs the 1-bit
 // bitmap. Ghost (dimmed example) and approximate (slider drag) results are display-only: they
-// carry `exact: false`, and a ghost carries no bitmap at all.
+// carry `exact: false` and no `document`; a ghost carries no bitmap at all.
 import { FaceRegistry } from './fonts.js';
 import { RenderError } from './errors.js';
 import { planLabel, drawPlan } from './layout.js';
@@ -205,13 +205,11 @@ function makeContext(canvas) {
   return ctx;
 }
 
-// A face is usable only while its FontFace is still registered and loaded: an evicted face
-// would make the canvas fall back to another font without any error.
+// A face is usable only while its own FontFace instance is registered and loaded (a different
+// FontFace of the same family does not count): an evicted face would make the canvas fall back
+// to another font without any error.
 function isLive(face) {
-  for (const fontFace of document.fonts) {
-    if (fontFace.status === 'loaded' && fontFace.family.replaceAll('"', '') === face.family) return true;
-  }
-  return false;
+  return face.fontFace.status === 'loaded' && document.fonts.has(face.fontFace);
 }
 
 function dimmed(ink, rows) {
@@ -313,6 +311,9 @@ export class Renderer {
     const ghost = Boolean(input.ghost);
     const exact = !ghost && !input.approximate;
     const document = normalize(input.document, this.#tables, !ghost && Boolean(input.approximate));
+    const approximate = !ghost && !exact;
+    // Nothing a recipe or print job could be built from leaves an inexact render: `document` is
+    // null for ghost and approximate results alike, `snapped` only reports the numbers drawn.
     const result = (parts) => ({
       generation: input.generation,
       exact,
@@ -320,7 +321,11 @@ export class Renderer {
       blocks: [],
       slots: [],
       face: null,
+      snapped: approximate
+        ? { width: document.options.font_width, weight: document.options.font_weight }
+        : null,
       ...parts,
+      document: exact ? parts.document : null,
     });
     if (document.kind === 'image') {
       const source = input.image;
