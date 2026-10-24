@@ -131,6 +131,8 @@ class StudioPrinter(BridgeTransportMixin, TinyPrintPrinter):
         )
 
     def _render(self, kind: str, payload: Any, font_size: int) -> tuple[bytes, int]:
+        if kind == "bitmap":
+            return payload["bitmap"], payload["rows"]
         if kind != "document":
             return super()._render(kind, payload, font_size)
         if not isinstance(payload, dict) or "document" not in payload:

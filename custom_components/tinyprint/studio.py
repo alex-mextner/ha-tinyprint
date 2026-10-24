@@ -2,6 +2,8 @@
 
 import asyncio
 import contextlib
+import copy
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -11,14 +13,18 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.service import async_register_admin_service
 
+from .bitmap import BitmapError, decode_bitmap_b64
 from .const import DOMAIN
 from .diagnostics import transport_info
+from .fonts import FONTS
+from .sensor import IN_FLIGHT_STATES, job_sensor_unique_id
 from .studio_render import PRESETS, TEMPLATES, preview_result, render_document
 
 DATA_KEY = "tinyprint_studio"
-PANEL_VERSION = "0.2.2"
+PANEL_VERSION = "0.3.0"
 
 
 def _printer(hass: HomeAssistant, device_id: str) -> Any:
@@ -96,8 +102,21 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
         )
         return result if call.return_response else None
 
+    async def print_bitmap(call: ServiceCall) -> dict[str, Any] | None:
+        printer = _printer(hass, call.data["device_id"])
+        rows = call.data["rows"]
+        try:
+            bitmap = decode_bitmap_b64(rows, call.data["bitmap_b64"])
+        except BitmapError as error:
+            raise ServiceValidationError(str(error)) from error
+        result = await printer.async_print("bitmap", {"rows": rows, "bitmap": bitmap}, 24)
+        if not call.return_response:
+            return None
+        return {**result, "bitmap_sha256": hashlib.sha256(bitmap).hexdigest()}
+
     async def printer_info(call: ServiceCall) -> dict[str, Any]:
         registry = dr.async_get(hass)
+        entity_registry = er.async_get(hass)
         printers = []
         for printer in hass.data[DOMAIN].values():
             device = registry.async_get_device(identifiers={(DOMAIN, printer.address)})
@@ -111,6 +130,9 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             printers.append(
                 {
                     "device_id": device.id if device else None,
+                    "entity_id": entity_registry.async_get_entity_id(
+                        "sensor", DOMAIN, job_sensor_unique_id(printer.address)
+                    ),
                     "name": printer.name,
                     "status": printer.status,
                     "transport": transport,
@@ -127,6 +149,8 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             "templates": TEMPLATES,
             "presets": PRESETS,
             "version": PANEL_VERSION,
+            "in_flight_states": sorted(IN_FLIGHT_STATES),
+            "fonts": copy.deepcopy(FONTS),
         }
 
     async def diagnose(call: ServiceCall) -> dict[str, Any] | None:
@@ -150,6 +174,12 @@ async def async_register_studio_services(hass: HomeAssistant) -> None:
             preview,
             {vol.Required("document"): dict, vol.Optional("device_id"): str},
             SupportsResponse.ONLY,
+        ),
+        (
+            "print_bitmap",
+            print_bitmap,
+            target | {vol.Required("rows"): object, vol.Required("bitmap_b64"): object},
+            SupportsResponse.OPTIONAL,
         ),
         (
             "print_document",
@@ -189,7 +219,9 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
             await hass.http.async_register_static_paths(
                 [
                     StaticPathConfig(
-                        "/tinyprint_static", str(Path(__file__).parent / "frontend"), False
+                        f"/tinyprint_static/{PANEL_VERSION}",
+                        str(Path(__file__).parent / "frontend"),
+                        False,
                     )
                 ]
             )
@@ -201,7 +233,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
                 webcomponent_name="tinyprint-panel",
                 sidebar_title="TinyPrint",
                 sidebar_icon="mdi:printer",
-                module_url=f"/tinyprint_static/tinyprint-panel.js?v={PANEL_VERSION}",
+                module_url=f"/tinyprint_static/{PANEL_VERSION}/tinyprint-panel.js",
                 require_admin=True,
             )
             state["panel"] = True

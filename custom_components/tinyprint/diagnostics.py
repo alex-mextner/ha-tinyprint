@@ -12,7 +12,7 @@ def transport_info(printer) -> dict:
 async def async_get_config_entry_diagnostics(hass, entry):
     printer = hass.data[DOMAIN][entry.entry_id]
     return {
-        "version": "0.2.2",
+        "version": "0.3.0",
         "transport": transport_info(printer),
         "status": printer.status,
         "last_attempt": printer.last_attempt,

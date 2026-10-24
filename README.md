@@ -1,5 +1,7 @@
 # TinyPrint X6h for Home Assistant
 
+Current version: 0.3.0.
+
 Local Bluetooth printing of text (including Cyrillic), QR codes and local images.
 Designed for lowercase-h **X6h** devices advertising AF30, with AE01 write and
 AE02 notification characteristics. This is **not** a generic X6H/MXW01/Phomemo driver.
@@ -12,7 +14,7 @@ the target unit is **not yet confirmed**: the device stopped advertising before
 the hardware check. A successful service result means **sent**, never verified
 paper output. Treat this initial version as an experimental integration.
 
-## Direct local LE (0.2.2)
+## Direct local LE (since 0.2.2)
 
 For an X6h on a Linux HA host, the opt-in `local_le` transport bypasses Classic
 Bluetooth bearer selection without a second host, HTTP bridge or token. All
@@ -44,10 +46,18 @@ tinyprint:
       font_path: "/config/tinyprint_fonts/DejaVuSans.ttf"
 ```
 
-No font binaries are bundled. For text, provide a TrueType font installed by you,
-including Cyrillic glyphs when required. Explicit font paths and image paths
+Roboto Flex and Tiny5 are bundled (SIL OFL 1.1), including Cyrillic, so text needs no
+setup. `font_path` is an optional override for the Pillow renderer used by actions
+(the `DejaVuSans.ttf` path above is an example). The old `/config/tinyprint_fonts`
+directory is no longer searched. Explicit font paths and image paths
 must be allowed by HA's `homeassistant.allowlist_external_dirs` setting. Use a
-narrow directory, not the filesystem root. QR and image printing need no font.
+narrow directory, not the filesystem root. See [Studio](docs/studio.md#fonts).
+
+## Studio editor
+
+The **TinyPrint** sidebar panel is a label editor: you type on a paper strip that shows
+the exact 1-bit bitmap, rendered live in the browser, and Print sends that bitmap. See
+[Studio](docs/studio.md).
 
 ## Actions
 

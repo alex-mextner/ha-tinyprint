@@ -377,7 +377,7 @@ export class Renderer {
 // document = {kind:'template',template,fields,options} | {kind:'text',text,options} | {kind:'qr',text,options} | {kind:'image',options}
 // RenderResult = { generation, exact: boolean, ghost: boolean, rows, bitmap: Uint8Array|null,   // null when ghost
 //                  pixels: ImageData, blocks: Block[], slots: Slot[], inkPercent: number, face: Face|null,
-//                  document: object|null }   // the effective document this render used; null for ghost
+//                  document: object|null }   // the effective document of an exact render; null for ghost and approximate (R15), which also set snapped:{width,weight} (approximate only)
 // SelfTestReport = { ok: boolean, engine: { userAgent, offscreenCanvas: boolean },
 //                    checks: { name: string, ok: boolean, detail: string }[] }
 ```

@@ -1,19 +1,14 @@
 """Exercise the real pure renderer without mocking Pillow or QR encoding."""
 
 import base64
-import importlib.util
 import io
-import sys
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageOps
+from shared_loader import load
 
-PATH = Path(__file__).parents[1] / "custom_components/tinyprint/studio_render.py"
-spec = importlib.util.spec_from_file_location("tinyprint_studio_renderer", PATH)
-r = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = r
-spec.loader.exec_module(r)
+r = load("studio_render")
 
 
 def encoded(image):
@@ -190,3 +185,244 @@ def test_non_regular_local_input_rejected_before_open(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "open", forbidden_open)
     with pytest.raises(ValueError, match="regular"):
         r.render_document({"kind": "image", "path": str(pipe)}, is_allowed_path=lambda path: True)
+
+
+BUNDLED = Path(r.__file__).parent / "frontend" / "fonts"
+
+
+def black_pixels(image):
+    return image.convert("L").histogram()[0]
+
+
+def ink_width(image):
+    box = ImageOps.invert(image.convert("L")).getbbox()
+    return box[2] - box[0]
+
+
+def render(**options):
+    return r.render_document(document(options=options))
+
+
+def test_default_font_is_bundled_roboto_flex_not_a_system_font(recorded_font_paths):
+    assert r.normalize_options({})["font"] == "roboto_flex"
+    r.render_document(document())
+    assert recorded_font_paths
+    assert all(Path(p).parent == BUNDLED for p in recorded_font_paths)
+
+
+def test_font_path_pinned_to_the_bundled_file_matches_the_default_render():
+    pinned = r.render_document(
+        document(), font_path=str(BUNDLED / "RobotoFlex.ttf"), is_allowed_path=lambda p: True
+    )
+    assert r.bitmap(pinned) == r.bitmap(r.render_document(document()))
+
+
+def test_pillow_axes_follow_fvar_order():
+    narrow, wide = render(font_width=25), render(font_width=151)
+    light, heavy = render(font_weight=100), render(font_weight=1000)
+    assert r.bitmap(narrow) != r.bitmap(wide)
+    assert r.bitmap(light) != r.bitmap(heavy)
+    assert ink_width(wide) > ink_width(narrow)
+    assert black_pixels(heavy) > black_pixels(light)
+
+
+@pytest.mark.parametrize("value", [24, 152, True, 100.5, "100"])
+def test_font_width_validates_before_pillow_clamps(value):
+    with pytest.raises(ValueError, match="font_width"):
+        r.normalize_options({"font_width": value})
+
+
+@pytest.mark.parametrize("value", [99, 1001, True, 400.5])
+def test_font_weight_validates_before_pillow_clamps(value):
+    with pytest.raises(ValueError, match="font_weight"):
+        r.normalize_options({"font_weight": value})
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"font_width": w} for w in (25, 100, 151)] + [{"font_weight": w} for w in (100, 400, 1000)],
+)
+def test_font_axis_edges_render(options):
+    assert render(**options).width == 384
+
+
+def test_font_width_message_names_the_key_and_bounds():
+    with pytest.raises(ValueError, match="font_width must be between 25 and 151"):
+        r.normalize_options({"font_width": 24})
+
+
+@pytest.mark.parametrize("name", ["", "arial", None, True, 1, "Roboto_Flex", [], {}])
+def test_font_is_a_closed_enum_in_options(name):
+    with pytest.raises(ValueError):
+        r.normalize_options({"font": name})
+
+
+@pytest.mark.parametrize("name", ["roboto_flex", "tiny5"])
+def test_both_bundled_fonts_render(name):
+    assert render(font=name).width == 384
+
+
+@pytest.mark.parametrize(
+    ("font", "size", "ok"),
+    [
+        ("roboto_flex", 11, False),
+        ("roboto_flex", 12, True),
+        ("roboto_flex", 96, True),
+        ("roboto_flex", 97, False),
+        ("roboto_flex", 24.0, False),
+        ("roboto_flex", True, False),
+        ("tiny5", 12, False),
+        ("tiny5", 8, True),
+        ("tiny5", 16, True),
+        ("tiny5", 48, True),
+        ("tiny5", 56, False),
+        ("tiny5", 16.0, False),
+        ("tiny5", True, False),
+        ("tiny5", "16", False),
+    ],
+)
+def test_font_size_bounds_follow_the_font(font, size, ok):
+    options = {"font": font, "font_size": size}
+    if ok:
+        assert r.normalize_options(options)["font_size"] == size
+    else:
+        with pytest.raises(ValueError, match="font_size"):
+            r.normalize_options(options)
+
+
+@pytest.mark.parametrize("value", [0, 2, 3, True, "1", 1.0])
+def test_columns_only_one_is_accepted(value):
+    with pytest.raises(ValueError, match="columns"):
+        r.normalize_options({"columns": value})
+
+
+@pytest.mark.parametrize("value", [2, 3])
+def test_columns_two_and_three_point_to_the_studio_editor(value):
+    with pytest.raises(ValueError, match="columns 2 and 3 are available only in the Studio editor"):
+        r.normalize_options({"columns": value})
+    assert r.normalize_options({"columns": 1})["columns"] == 1
+
+
+def test_tiny5_pillow_limits():
+    with pytest.raises(ValueError, match="font_width 200 is available only in the Studio editor"):
+        r.normalize_options({"font": "tiny5", "font_width": 200})
+    with pytest.raises(ValueError, match="font_weight"):
+        r.normalize_options({"font": "tiny5", "font_weight": 700})
+    assert render(font="tiny5", font_width=100).width == 384
+
+
+def test_derived_sizes_follow_the_font():
+    fields = {"title": "T", "text": "x", "footer": "f"}
+    options = {"font": "tiny5", "font_size": 16}
+    plan = r.layout_blocks(document(template="note", fields=fields, options=options))
+    # title (16 + 6 snapped to the 8 grid), body, footer (16 - 4 snapped)
+    assert [b["size"] for b in plan["blocks"]] == [24, 16, 16]
+
+
+ALL_TEMPLATES = ["note", "heading", "checklist", "qr_label", "storage_label", "spool_label"]
+
+
+def example(name, **options):
+    return document(template=name, fields=dict(r.TEMPLATES[name]["example"]), options=options)
+
+
+@pytest.mark.parametrize("name", ALL_TEMPLATES)
+def test_layout_blocks_describe_the_rendered_label(name):
+    doc = example(name)
+    plan = r.layout_blocks(doc)
+    blocks = plan["blocks"]
+    assert plan["rows"] == r.render_document(doc).height
+    assert blocks[0]["y"] == 8
+    for before, after in zip(blocks, blocks[1:]):
+        assert after["y"] == before["y"] + before["h"]
+    assert sum(b["h"] for b in blocks) + 16 == plan["rows"]
+    for block in blocks:
+        if block["kind"] == "text":
+            assert block["text_y"] == block["y"] + 8
+            assert block["h"] == len(block["lines"]) * block["step"] + 16
+            assert block["step"] == block["ascent"] + block["descent"] + 5
+            assert block["w"] == 384 - block["x"] - 10
+        else:
+            assert block["lines"] == [] and block["x"] == (384 - block["w"]) // 2
+
+
+@pytest.mark.parametrize("name", ALL_TEMPLATES)
+def test_every_ink_row_lies_inside_a_block_band_or_the_border(name):
+    for border in (False, True):
+        doc = example(name, border=border)
+        plan = r.layout_blocks(doc)
+        image = r.render_document(doc).convert("L")
+        low, high = (0, plan["rows"]) if border else (8, plan["rows"] - 8)
+        for y in range(plan["rows"]):
+            ink = image.crop((0, y, 384, y + 1)).getextrema()[0] == 0
+            if ink:
+                assert low <= y < high, (name, border, y)
+
+
+def test_title_is_never_smaller_than_body_text_at_size_96():
+    for name in ("note", "heading"):
+        plan = r.layout_blocks(example(name, font_size=96))
+        assert plan["blocks"][0]["field"] == "title" and plan["blocks"][0]["size"] >= 96
+    sizes = {"note": 30, "heading": 38}
+    for name, title in sizes.items():
+        plan = r.layout_blocks(example(name, font_size=24))
+        assert plan["blocks"][0]["size"] == title
+    plan = r.layout_blocks(document(template="note", fields={"text": "x", "footer": "f"}))
+    assert plan["blocks"][-1]["field"] == "footer" and plan["blocks"][-1]["size"] == 20
+
+
+def test_layout_blocks_for_text_and_qr_documents():
+    plan = r.layout_blocks({"kind": "text", "text": "one\ntwo", "options": {"font_size": 24}})
+    assert [b["field"] for b in plan["blocks"]] == ["text"]
+    assert plan["blocks"][0]["lines"] == ["one", "two"]
+    doc = {"kind": "qr", "text": "https://example.com"}
+    plan = r.layout_blocks(doc)
+    (block,) = plan["blocks"]
+    assert block["kind"] == "qr" and block["field"] == "qr" and block["y"] == 8
+    assert plan["rows"] == block["h"] + 16 == r.render_document(doc).height
+
+
+def test_layout_blocks_rejects_image_documents():
+    with pytest.raises(ValueError, match="template, text and qr"):
+        r.layout_blocks({"kind": "image", "path": "/x.png"})
+
+
+def test_spool_rows_are_one_band_with_value_anchors():
+    plan = r.layout_blocks(example("spool_label"))
+    rows = [b for b in plan["blocks"] if b["field"] == "spool_rows"]
+    assert len(rows) == 1
+    block = rows[0]
+    assert [a["field"] for a in block["anchors"]] == ["material", "color", "weight", "nozzle"]
+    assert block["lines"][0].startswith("Материал: ")
+    for index, anchor in enumerate(block["anchors"]):
+        assert anchor["text_y"] == block["text_y"] + index * block["step"]
+        assert anchor["h"] == block["step"] and anchor["x"] > block["x"]
+        assert 0 < anchor["w"] and anchor["x"] + anchor["w"] == 384 - 10
+
+
+def test_spool_anchor_follows_the_line_where_the_value_starts():
+    # At size 96 "Материал:" no longer fits beside its value, so the value starts a line lower.
+    plan = r.layout_blocks(example("spool_label", font_size=96))
+    block = next(b for b in plan["blocks"] if b["field"] == "spool_rows")
+    for anchor in block["anchors"]:
+        assert 0 < anchor["w"] and anchor["x"] + anchor["w"] == 374 and anchor["h"] > 0
+        assert (
+            anchor["text_y"] + anchor["h"] <= block["text_y"] + len(block["lines"]) * block["step"]
+        )
+    first = block["anchors"][0]
+    assert first["text_y"] > block["text_y"] and first["x"] == 10
+
+
+def test_layout_blocks_authorizes_font_files_like_render_document(tmp_path):
+    font = tmp_path / "x.ttf"
+    doc = {"kind": "text", "text": "x"}
+    with pytest.raises(ValueError, match="allowed Home Assistant path"):
+        r.layout_blocks(doc, str(font))
+    with pytest.raises(ValueError, match="allowed Home Assistant path"):
+        r.layout_blocks(doc, str(font), lambda path: False)
+
+
+def test_checklist_ignores_align():
+    left = r.layout_blocks(example("checklist", align="left"))
+    centre = r.layout_blocks(example("checklist", align="center"))
+    assert left == centre

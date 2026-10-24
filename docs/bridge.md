@@ -40,9 +40,9 @@ Find the printer address with `bluetoothctl devices` or from the TinyPrint adver
 (service `AF30`), and the adapter address with `bluetoothctl list`.
 
 The installer is idempotent. It copies the code to `~/.local/share/tinyprint-bridge/app`
-(`bridge/` plus the four shared modules `protocol.py`, `transport.py`, `att.py`,
-`bridge_wire.py` under `custom_components/tinyprint/`; keep that layout or set
-`TINYPRINT_SHARED_DIR`), creates a venv with `aiohttp`, writes the unit to
+(`bridge/` plus the shared modules `protocol.py`, `transport.py`, `att.py`,
+`bridge_wire.py`, `le_link.py` and `bitmap.py` under `custom_components/tinyprint/`; keep that
+layout or set `TINYPRINT_SHARED_DIR`), creates a venv with `aiohttp`, writes the unit to
 `~/.config/systemd/user/`, and starts it. Options: `--no-systemd`, `--no-venv`, `--prefix`,
 `--config-dir`, `--bind`, `--port`; `--prefix` and `--config-dir` must be absolute paths of plain
 characters (no spaces). `--bind`/`--port` only apply when `bridge.env` is first created. Re-running

@@ -135,3 +135,24 @@ cancel:
         device:
           integration: tinyprint
       name: Принтер
+print_bitmap:
+  name: Напечатать растр
+  description: Печать готового 1-битного растра (384 точки в строке). Только администратор или доверенная автоматизация.
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tinyprint
+      name: Принтер
+    rows:
+      required: true
+      example: 2
+      selector:
+        object: {}
+      name: Число строк (1-2048)
+    bitmap_b64:
+      required: true
+      selector:
+        object: {}
+      name: Растр в base64, ровно 48 байт на строку
