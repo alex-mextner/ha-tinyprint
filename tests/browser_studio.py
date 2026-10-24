@@ -1102,35 +1102,74 @@ async def check_renderer_check_during_renders(p, browser):
         )
 
 
-async def check_renderer_check_keeps_font_faces_usable(p, browser):
+FACE_OF_RESULT = f"() => {PANEL}.lastResult.face.fontFace"
+# Faces the self-test does not use: loading them fills the registry (limit 8) without
+# touching the face of the document on screen.
+OTHER_FACES = [(30, 500), (40, 500), (80, 500), (90, 500), (110, 500), (120, 500)]
+
+
+async def check_renderer_check_evicts_and_redraws_face(p, browser):
     async with panel(p, browser) as page:
         await set_range(page, "font_width", 60)
         await set_range(page, "font_weight", 700)
-        for font, text in (("roboto_flex", "Широкий жирный"), ("tiny5", "Ёж Ґ Є")):
-            await page.locator("#font").select_option(font)
-            await fill_text(page, text)
-            await settle(page)
-            before = await canvas_bytes(page)
-            assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
-            # The check created more faces than the registry keeps: the face on screen must
-            # still be registered in the page, or the overlay would fall back to another font.
-            assert await page.evaluate(
-                f"() => document.fonts.has({PANEL}.lastResult.face.fontFace)"
-            )
-            family = await page.evaluate(f"() => {PANEL}.lastResult.face.family")
-            assert await page.evaluate(OVERLAY_FAMILY) == family, font
-            # Drawn again after the churn, the same label gives the same pixels as before it.
-            await fill_text(page, text + " 2")
-            await settle(page)
-            await fill_text(page, text)
-            await settle(page)
-            assert await canvas_bytes(page) == before, font
-            document = await page.evaluate(f"() => {PANEL}.getDocument()")
-            rows, expected = await reference(page, document)
-            assert await canvas_bytes(page) == (rows, expected), font
-            assert await page.evaluate(OVERLAY_FAMILY) == await page.evaluate(
-                f"() => {PANEL}.lastResult.face.family"
-            ), font
+        await fill_text(page, "Широкий жирный")
+        await settle(page)
+        before = await canvas_bytes(page)
+        old = await page.evaluate_handle(FACE_OF_RESULT)
+        family = await page.evaluate(f"() => {PANEL}.lastResult.face.family")
+        # Fill the registry to its limit of 8 with faces newer than the one on screen.
+        await page.evaluate(
+            f"""async (faces) => {{
+              for (const [width, weight] of faces) {{
+                await {PANEL}.renderer.faceFor({{ font: 'roboto_flex', font_width: width, font_weight: weight }});
+              }}
+            }}""",
+            OTHER_FACES,
+        )
+        assert await page.evaluate("(f) => document.fonts.has(f)", old), "premise: face loaded"
+        assert await page.evaluate("() => document.fonts.size") == 8
+        assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
+        # The premise: the check's own faces pushed the displayed one out of the page.
+        assert not await page.evaluate("(f) => document.fonts.has(f)", old), (
+            "premise: the self-test evicted the displayed face"
+        )
+        # Until the next render the overlay inputs must still have a face of that family.
+        assert await page.evaluate(
+            """(family) => [...document.fonts].some(
+              (f) => f.family.replace(/["']/g, '') === family && f.status === 'loaded')""",
+            family,
+        ), "the displayed family is gone from the page"
+        assert await page.evaluate(OVERLAY_FAMILY) == family
+        # Drawn again, the label comes from a NEW FontFace of the same family, with the same pixels.
+        await fill_text(page, "Другое")
+        await settle(page)
+        await fill_text(page, "Широкий жирный")
+        await settle(page)
+        new = await page.evaluate_handle(FACE_OF_RESULT)
+        assert await page.evaluate("([a, b]) => a !== b", [old, new]), "same stale FontFace"
+        assert await page.evaluate("(f) => document.fonts.has(f)", new)
+        assert await page.evaluate(f"() => {PANEL}.lastResult.face.family") == family
+        assert await page.evaluate(OVERLAY_FAMILY) == family
+        assert await canvas_bytes(page) == before
+        document = await page.evaluate(f"() => {PANEL}.getDocument()")
+        assert await canvas_bytes(page) == await reference(page, document)
+
+
+async def check_renderer_check_keeps_tiny5_face(p, browser):
+    async with panel(p, browser) as page:
+        await page.locator("#font").select_option("tiny5")
+        await fill_text(page, "Ёж Ґ Є")
+        await settle(page)
+        before = await canvas_bytes(page)
+        family = await page.evaluate(f"() => {PANEL}.lastResult.face.family")
+        assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
+        assert await page.evaluate(f"() => document.fonts.has({PANEL}.lastResult.face.fontFace)")
+        assert await page.evaluate(OVERLAY_FAMILY) == family
+        await fill_text(page, "Ёж Ґ Є 2")
+        await settle(page)
+        await fill_text(page, "Ёж Ґ Є")
+        await settle(page)
+        assert await canvas_bytes(page) == before
 
 
 async def check_injection(p, browser):
@@ -2528,9 +2567,10 @@ CHECKS = [
         check_renderer_check_during_renders,
         False,
     ),
+    ("renderer check keeps the Tiny5 face", check_renderer_check_keeps_tiny5_face, False),
     (
-        "renderer check keeps later renders right in other fonts",
-        check_renderer_check_keeps_font_faces_usable,
+        "renderer check evicts a face and the next render redraws it",
+        check_renderer_check_evicts_and_redraws_face,
         False,
     ),
     (

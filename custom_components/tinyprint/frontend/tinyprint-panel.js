@@ -783,6 +783,8 @@ class TinyPrintPanel extends HTMLElement {
     try {
       const report = await this.renderer.selfTest();
       if (epoch !== this.epoch) return;
+      await this.restoreDisplayedFace();
+      if (epoch !== this.epoch) return;
       const failed = report.checks.find(check => !check.ok);
       const lines = [
         `canvas: ${report.engine.offscreenCanvas ? 'OffscreenCanvas' : 'HTMLCanvasElement'}`,
@@ -797,6 +799,17 @@ class TinyPrintPanel extends HTMLElement {
     } catch (error) {
       if (epoch === this.epoch) { output.textContent = 'SELFTEST FAIL selftest_error'; this.showCheckStatus('Проверка рендерера не завершилась. Попробуйте ещё раз.', true); }
     } finally { if (epoch === this.epoch) button.disabled = false; }
+  }
+  // The check's own faces can push the face on the strip out of the page, and the overlay inputs are
+  // styled with its family: load that very face again (named by the result on screen, not by the
+  // controls, which may already differ) so they keep matching the bitmap until the next render.
+  async restoreDisplayedFace() {
+    const face = this.lastResult?.face;
+    const font = Object.keys(this.fonts).find(key => this.fonts[key] === face?.entry);
+    const drawn = /-w(\d+)-W(\d+)$/.exec(face?.family ?? '');
+    if (!font || !drawn) return;
+    try { await this.renderer.faceFor({ font, font_width: Number(drawn[1]), font_weight: Number(drawn[2]) }); }
+    catch (error) { /* the next render reports a font that cannot be loaded */ }
   }
   // The check reports in its own line: it never replaces (or is replaced by) the panel notice.
   showCheckStatus(text, error = false) {
