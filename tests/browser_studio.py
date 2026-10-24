@@ -1505,15 +1505,25 @@ async def check_overlay_baseline(p, browser):
 
 
 async def check_typing_updates_strip(p, browser):
+    """Acceptance 1: with the fonts loaded one keystroke changes the strip by the end of the next frame, no network."""
     async with panel(p, browser) as page:
         await fill_text(page, "Я")
         await settle(page)
         before = await page.evaluate(CANVAS_HASH)
         sent = len(await calls(page))
+        requested = len(page.requests)
+        # Armed in the capture phase, so its frame callback is queued before the panel's own and
+        # the timeout runs after every callback of that frame (and the microtasks they start).
+        await page.evaluate(
+            """() => document.addEventListener('input', () => {
+              window.afterNextFrame = new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+            }, { capture: true, once: true })"""
+        )
         await page.keyboard.type("Ж")
-        await page.evaluate(TWO_FRAMES)
+        await page.evaluate("() => window.afterNextFrame")
         assert await page.evaluate(CANVAS_HASH) != before
         assert len(await calls(page)) == sent  # editing never calls a service
+        assert len(page.requests) == requested, page.requests[requested:]  # nor loads anything
 
 
 async def check_blank_field_keeps_focus(p, browser):
