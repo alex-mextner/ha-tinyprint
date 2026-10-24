@@ -44,12 +44,15 @@ jobs:
           PYTHONPATH=/workspace:/workspace/bridge:/tmp/test-deps python -m unittest discover -s tests -p "test_ha*.py" -v'
   browser:
     runs-on: ubuntu-latest
+    # Local runs: browser_renderer.py 149 s, browser_studio.py 239 s, both engines (about 6.5 min),
+    # so the tests get about three times that; the rest covers the pip and browser downloads.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - run: pip install Pillow==12.3.0 qrcode==8.2 playwright opencv-python-headless numpy
+      - run: pip install Pillow==12.3.0 qrcode==8.2 playwright==1.64.1 opencv-python-headless==5.0.0.93 numpy==2.5.4
       - run: python -m playwright install --with-deps chromium firefox
       - run: python tests/browser_renderer.py
       - run: python tests/browser_studio.py
