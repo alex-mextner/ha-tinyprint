@@ -950,30 +950,187 @@ async def check_renderer_check_copies(p, browser):
         assert await page.evaluate("() => window.copied") == output
 
 
+STATUS = "#renderer-check-status"
+VANISHED = "Выбранный принтер больше недоступен. Выберите принтер заново."
+
+
 async def check_renderer_check_reports_failure(p, browser):
     async with panel(p, browser, settle=False, missing_font=True) as page:
         await page.wait_for_function(SETTLED)
         await fill_text(page, "Шрифт")
         await page.wait_for_function(f"() => !{PANEL}.scheduler.pending")
+        render_error = await page.locator("#notice").text_content()
         sent = len(await calls(page))
         output = await run_renderer_check(page)
         assert verdict(output) == "SELFTEST FAIL faces_loaded", output
         assert "FAIL faces_loaded" in output and "Traceback" not in output and " at " not in output
-        assert "error" in (await page.locator("#notice").get_attribute("class") or "")
-        assert "faces_loaded" in await page.locator("#notice").text_content()
+        assert "error" in (await page.locator(STATUS).get_attribute("class") or "")
+        assert "faces_loaded" in await page.locator(STATUS).text_content()
+        # The check reports in its own line: the render error in the panel notice is untouched.
+        assert await page.locator("#notice").text_content() == render_error
         assert len(await calls(page)) == sent
         # The panel keeps working: the font comes back and a normal render succeeds.
         page.font_missing = False
-        # A re-run that passes takes the old failure message away.
-        assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
-        # The render error that the failed check had covered is on screen again.
-        assert "faces_loaded" not in await page.locator("#notice").text_content()
-        assert "error" in (await page.locator("#notice").get_attribute("class") or "")
+        again = await run_renderer_check(page)
+        assert verdict(again) == "SELFTEST PASS", again
+        assert "faces_loaded" not in await page.locator(STATUS).text_content()
+        assert "error" not in (await page.locator(STATUS).get_attribute("class") or "")
         await page.locator("#refresh").click()
         await settle(page)
         assert await page.locator("#raster").is_visible()
-        again = await run_renderer_check(page)
-        assert verdict(again) == "SELFTEST PASS", again
+        assert await page.locator("#print").is_enabled()
+
+
+async def check_renderer_check_keeps_other_notices(p, browser):
+    async with panel(p, browser, settle=False, missing_font=True) as page:
+        await page.wait_for_function(SETTLED)
+        await page.evaluate(f"(text) => {PANEL}.notice(text, true)", VANISHED)
+        assert verdict(await run_renderer_check(page)) == "SELFTEST FAIL faces_loaded"
+        assert await page.locator("#notice").text_content() == VANISHED
+        assert "error" in (await page.locator("#notice").get_attribute("class") or "")
+        page.font_missing = False
+        assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
+        assert await page.locator("#notice").text_content() == VANISHED
+        # The notice lives by its own lifecycle: a later notice replaces it as before.
+        await page.evaluate(f"() => {PANEL}.notice('Данные отправлены.')")
+        assert await page.locator("#notice").text_content() == "Данные отправлены."
+
+
+async def check_renderer_check_clipboard_without_write_text(p, browser):
+    async with panel(p, browser) as page:
+        await page.evaluate(
+            "() => Object.defineProperty(navigator, 'clipboard', { value: {}, configurable: true })"
+        )
+        output = await run_renderer_check(page)
+        assert verdict(output) == "SELFTEST PASS", output
+        assert await page.locator("#renderer-check-copy").is_hidden()
+
+
+async def check_renderer_check_copy_rejected(p, browser):
+    async with panel(p, browser) as page:
+        await page.evaluate(
+            "() => Object.defineProperty(navigator, 'clipboard', { value: "
+            "{ writeText: async () => { throw new DOMException('denied', 'NotAllowedError'); } }, "
+            "configurable: true })"
+        )
+        output = await run_renderer_check(page)
+        await page.locator("#renderer-check-copy").click()
+        await page.wait_for_function(
+            f"() => {PANEL}.shadowRoot.querySelector('{STATUS}').textContent.includes('Буфер обмена')"
+        )
+        assert "error" in (await page.locator(STATUS).get_attribute("class") or "")
+        assert await page.locator("#renderer-check-data").text_content() == output
+        # page.errors (pageerror, unhandled rejections) is asserted when the panel closes.
+        assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
+
+
+async def check_renderer_check_during_renders(p, browser):
+    async with panel(p, browser, viewport={"width": 1400, "height": 1000}) as page:
+        await type_title_and_text(page)
+        await settle(page)
+        # A render is pending when the check runs: the newest generation still wins.
+        await page.locator("#diagnostics > summary").click()
+        pending = await page.evaluate(
+            f"""() => {{
+              const p = {PANEL};
+              const field = p.shadowRoot.querySelector('#field-text');
+              field.value = 'Второй';
+              field.dispatchEvent(new Event('input', {{ bubbles: true }}));
+              p.shadowRoot.querySelector('#renderer-check').click();
+              return p.scheduler.pending;
+            }}"""
+        )
+        assert pending is True  # the check started while that render was still queued
+        await page.wait_for_function(
+            "() => /SELFTEST (PASS|FAIL)/.test("
+            f"{PANEL}.shadowRoot.querySelector('#renderer-check-data').textContent)"
+        )
+        assert "SELFTEST PASS" in await page.locator("#renderer-check-data").text_content()
+        await settle(page)
+        last = await page.evaluate(
+            f"() => {PANEL}.lastResult.generation === {PANEL}.scheduler.generation"
+        )
+        assert last is True
+        assert await page.locator("#print").is_enabled()
+        sent = await click_print(page)
+        _, expected = await reference(page, await page.evaluate(f"() => {PANEL}.getDocument()"))
+        assert base64.b64decode(sent["bitmap_b64"]) == expected
+        # A width/weight drag is in flight (approximate render newest, Print blocked): the check
+        # neither corrupts the strip nor ends the drag nor unblocks Print.
+        slider = page.locator("#font_weight")
+        box = await slider.bounding_box()
+        y = box["y"] + box["height"] / 2
+        await page.mouse.move(box["x"] + box["width"] * 0.5, y)
+        await page.mouse.down()
+        x = box["x"] + box["width"] * 0.62
+        await page.mouse.move(x, y, steps=4)
+        for _ in range(40):
+            if int(await slider.input_value()) % 50:
+                break
+            x += 1
+            await page.mouse.move(x, y)
+        value = int(await slider.input_value())
+        await settle(page)
+        during = await page.evaluate(LAST)
+        assert during["exact"] is False and await page.locator("#print").is_disabled()
+        raster = (await panel_snapshot(page))["raster"]
+        generation = await page.evaluate(f"() => {PANEL}.scheduler.generation")
+        # Click through the DOM: a real pointer click would end the drag by itself.
+        output = await page.evaluate(
+            f"""async () => {{
+              const p = {PANEL};
+              p.shadowRoot.querySelector('#renderer-check').click();
+              while (!/SELFTEST (PASS|FAIL)/.test(p.shadowRoot.querySelector('#renderer-check-data').textContent)) {{
+                await new Promise((r) => setTimeout(r, 20));
+              }}
+              return p.shadowRoot.querySelector('#renderer-check-data').textContent;
+            }}"""
+        )
+        assert verdict(output) == "SELFTEST PASS", output
+        assert await page.evaluate(f"() => {PANEL}.scheduler.generation") == generation
+        assert await page.evaluate(LAST) == during
+        assert (await panel_snapshot(page))["raster"] == raster
+        assert await page.locator("#print").is_disabled()
+        assert int(await slider.input_value()) == value
+        await page.mouse.up()
+        await settle(page)
+        after = await page.evaluate(LAST)
+        assert after["exact"] is True and after["family"] == f"tp-roboto_flex-w100-W{value}", after
+        assert await page.locator("#print").is_enabled()
+        assert await page.evaluate(
+            f"() => {PANEL}.lastResult.generation === {PANEL}.scheduler.generation"
+        )
+
+
+async def check_renderer_check_keeps_font_faces_usable(p, browser):
+    async with panel(p, browser) as page:
+        await set_range(page, "font_width", 60)
+        await set_range(page, "font_weight", 700)
+        for font, text in (("roboto_flex", "Широкий жирный"), ("tiny5", "Ёж Ґ Є")):
+            await page.locator("#font").select_option(font)
+            await fill_text(page, text)
+            await settle(page)
+            before = await canvas_bytes(page)
+            assert verdict(await run_renderer_check(page)) == "SELFTEST PASS"
+            # The check created more faces than the registry keeps: the face on screen must
+            # still be registered in the page, or the overlay would fall back to another font.
+            assert await page.evaluate(
+                f"() => document.fonts.has({PANEL}.lastResult.face.fontFace)"
+            )
+            family = await page.evaluate(f"() => {PANEL}.lastResult.face.family")
+            assert await page.evaluate(OVERLAY_FAMILY) == family, font
+            # Drawn again after the churn, the same label gives the same pixels as before it.
+            await fill_text(page, text + " 2")
+            await settle(page)
+            await fill_text(page, text)
+            await settle(page)
+            assert await canvas_bytes(page) == before, font
+            document = await page.evaluate(f"() => {PANEL}.getDocument()")
+            rows, expected = await reference(page, document)
+            assert await canvas_bytes(page) == (rows, expected), font
+            assert await page.evaluate(OVERLAY_FAMILY) == await page.evaluate(
+                f"() => {PANEL}.lastResult.face.family"
+            ), font
 
 
 async def check_injection(p, browser):
@@ -2359,6 +2516,23 @@ CHECKS = [
         False,
     ),
     ("renderer check output can be copied", check_renderer_check_copies, False),
+    ("renderer check keeps other notices", check_renderer_check_keeps_other_notices, False),
+    (
+        "renderer check hides copy without writeText",
+        check_renderer_check_clipboard_without_write_text,
+        False,
+    ),
+    ("renderer check copy rejection shows a message", check_renderer_check_copy_rejected, False),
+    (
+        "renderer check during a render and a slider drag",
+        check_renderer_check_during_renders,
+        False,
+    ),
+    (
+        "renderer check keeps later renders right in other fonts",
+        check_renderer_check_keeps_font_faces_usable,
+        False,
+    ),
     (
         "renderer check reports a failing check and the panel keeps working",
         check_renderer_check_reports_failure,
