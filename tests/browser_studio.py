@@ -679,6 +679,87 @@ async def check_pending_blocks_print(p, browser):
         assert base64.b64decode(sent["bitmap_b64"]) == expected
 
 
+async def assert_direct_print_refused(page, code, *, edit=None, second_guard=False):
+    """`print()` itself, not the (disabled, so inert) button, must refuse while `code` blocks.
+
+    `edit` types into the text field first. With `second_guard` the blocker re-check is replaced by
+    "nothing blocks" for a second call, so a refusal can only come from the printable-result check.
+    All of it runs in one page task: the state read and the calls cannot be separated by a render.
+    """
+    codes = await page.evaluate(
+        f"""async ([edit, secondGuard]) => {{
+          const p = {PANEL};
+          if (edit) {{
+            const field = p.shadowRoot.querySelector('#field-text');
+            field.value = edit;
+            field.dispatchEvent(new Event('input', {{ bubbles: true }}));
+          }}
+          const codes = p.evaluate().codes;
+          await p.print();
+          if (secondGuard) {{
+            const real = p.evaluate;
+            p.evaluate = () => ({{ codes: [], missing: [], template: null }});
+            try {{ await p.print(); }} finally {{ p.evaluate = real; }}
+          }}
+          return codes;
+        }}""",
+        [edit, second_guard],
+    )
+    assert code in codes, (code, codes)
+    assert not await calls(page, "print_bitmap"), (code, second_guard)
+
+
+async def check_direct_print_respects_blockers(p, browser):
+    """`print()` sends nothing in any blocker state, whatever calls it.
+
+    The blocker re-check is exercised in every state. Where the render leaves no printable result
+    (pending, an older result while an edit renders, approximate, ghost, partial, failed) the
+    result check behind it is exercised alone as well.
+    """
+    async with panel(p, browser, settle=False, font_delay_ms=300) as page:
+        await page.wait_for_function(f"() => {PANEL}.loaded")
+        await fill_text(page, "Дождись")
+        await assert_direct_print_refused(page, "render_pending", second_guard=True)
+    async with panel(p, browser) as page:
+        await fill_text(page, "Привет")
+        await settle(page)
+        await assert_direct_print_refused(page, "render_pending", edit="Привет!", second_guard=True)
+    async with panel(p, browser) as page:
+        await type_title_and_text(page)
+        await set_range(page, "font_weight", 500, ("input",))
+        await settle(page)
+        await assert_direct_print_refused(page, "render_approximate", second_guard=True)
+    async with panel(p, browser) as page:
+        await assert_direct_print_refused(page, "no_input", second_guard=True)  # the ghost
+    async with panel(p, browser) as page:
+        await fill_text(page, "Я", "title")
+        await settle(page)
+        await assert_direct_print_refused(page, "required_blank", second_guard=True)
+    async with panel(p, browser, settle=False, missing_font=True) as page:
+        await page.wait_for_function(SETTLED)
+        await fill_text(page, "Шрифт")
+        await page.wait_for_function(f"() => !{PANEL}.scheduler.pending")
+        await assert_direct_print_refused(page, "render_failed", second_guard=True)
+    async with panel(p, browser) as page:
+        await fill_text(page, "Привет")
+        await settle(page)
+        await set_state(page, "printing")
+        await assert_direct_print_refused(page, "job_in_flight")
+    async with panel(p, browser, printers=[]) as page:
+        await fill_text(page, "Привет")
+        await settle(page)
+        await assert_direct_print_refused(page, "no_device")
+    async with panel(p, browser) as page:
+        await fill_text(page, "\u200b")
+        await settle(page)
+        await assert_direct_print_refused(page, "no_ink")
+    async with panel(p, browser) as page:
+        await fill_text(page, "а" * 1600, "title")
+        await fill_text(page, "б" * 1600)
+        await settle(page)
+        await assert_direct_print_refused(page, "text_too_long")
+
+
 async def check_font_failure(p, browser):
     async with panel(p, browser, settle=False, missing_font=True) as page:
         await page.wait_for_function(SETTLED)
@@ -2597,6 +2678,7 @@ CHECKS = [
     ("overlay uses the renderer's font and the block's alignment", check_overlay_font, False),
     ("overlay baseline equals the bitmap baseline", check_overlay_baseline, False),
     ("typing in an overlay updates the strip within a frame", check_typing_updates_strip, False),
+    ("print() itself refuses in the blocker states", check_direct_print_respects_blockers, False),
     (
         "a blank field stays reachable and keeps focus and caret",
         check_blank_field_keeps_focus,
