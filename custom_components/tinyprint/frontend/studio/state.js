@@ -1,5 +1,5 @@
 // Pure editor state rules: input detection, ghost documents, Print blockers and result gating.
-import { BLANK } from '../renderer/index.js';
+import { BLANK } from '../renderer/blank.js';
 
 export const BLOCKERS = [
   'no_device',

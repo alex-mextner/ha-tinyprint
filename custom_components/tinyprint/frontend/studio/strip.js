@@ -1,7 +1,7 @@
 // Paper strip: the 1-bit bitmap plus the inputs that edit it, in place (transparent overlays on the
 // blocks) or docked below it. The strip image under an overlay is the crisp bitmap, so the overlay
 // shows only the native caret and selection; its text is transparent and uses the renderer's own face.
-import { BLANK } from '../renderer/index.js';
+import { BLANK } from '../renderer/blank.js';
 
 /** Task 2 outcome (measured prefix widths and baseline, user-confirmed caret): 'overlay' | 'docked-all'. */
 export const EDIT_POLICY = 'overlay';
@@ -394,6 +394,7 @@ export class PaperStrip {
         `caret-color:${CARET_COLOR}`,
         `font:${geometry.face.css(geometry.size)}`,
         `line-height:${px(geometry.step)}`,
+        'direction:ltr',
         `text-align:${geometry.align}`,
         'text-rendering:geometricPrecision',
         'white-space:pre-wrap',

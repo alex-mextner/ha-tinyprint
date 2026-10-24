@@ -2,6 +2,7 @@
 // 4-module quiet zone as studio_render `_qr_part`.
 import qrcodegen from '../vendor/qrcodegen.js';
 import { RenderError } from './errors.js';
+import { BLANK } from './blank.js';
 import { WIDTH } from './pack.js';
 
 const { QrCode, QrSegment } = qrcodegen;
@@ -28,7 +29,7 @@ const symbols = new Map();
 const layers = new Map();
 
 function encode(text, ecc) {
-  if (typeof text !== 'string' || text.trim() === '') throw new RenderError('blank_qr');
+  if (typeof text !== 'string' || BLANK.test(text)) throw new RenderError('blank_qr');
   if (!Object.hasOwn(LEVELS, ecc)) throw new RenderError('bad_document', `unknown QR level ${ecc}`);
   return cached(symbols, JSON.stringify([text, ecc]), () => {
     try {

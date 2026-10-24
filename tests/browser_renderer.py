@@ -2253,6 +2253,78 @@ async def check_renderer_no_offscreen(page):
     assert plain["engine"]["offscreenCanvas"] is True, plain
 
 
+async def check_renderer_ignores_page_direction(page):
+    """An RTL page must not change the bidi base of a mixed Cyrillic/Latin line on either canvas kind."""
+    bare = await page.sibling(no_offscreen=True)
+    try:
+        body = """
+        document.documentElement.dir = args.dir;
+        const res = await go(args.note);
+        return { bytes: Array.from(res.bitmap), offscreen: typeof OffscreenCanvas };
+        """
+        note = {
+            "kind": "template",
+            "template": "note",
+            "fields": {"text": "Привет world!"},
+            "options": {},
+        }
+        found = {}
+        for label, target in (("offscreen", page), ("fallback", bare)):
+            for direction in ("ltr", "rtl"):
+                found[label, direction] = await run_renderer(target, body, note=note, dir=direction)
+    finally:
+        await bare.context.browser.close()
+    assert found["offscreen", "ltr"]["offscreen"] == "function", found["offscreen", "ltr"][
+        "offscreen"
+    ]
+    assert found["fallback", "ltr"]["offscreen"] == "undefined", found["fallback", "ltr"][
+        "offscreen"
+    ]
+    base = found["offscreen", "ltr"]["bytes"]
+    for key, value in found.items():
+        assert value["bytes"] == base, (
+            f"{key} differs from the OffscreenCanvas render on an LTR page"
+        )
+
+
+async def check_renderer_feff_only_qr_matches_python(page):
+    """U+FEFF is not whitespace for Python's str.strip(): the QR is drawn, never blank_qr.
+
+    Python's automatic mask differs from qrcodegen's (see the forced-mask module test), so the
+    geometry (rows, QR block) is compared, not the module pattern.
+    """
+    text = "\ufeff"
+    documents = {
+        "plain": qr_doc(text),
+        "labelled": normalized(
+            {
+                "kind": "template",
+                "template": "qr_label",
+                "fields": {"qr": text},
+                "options": {"columns": 1},
+            }
+        ),
+    }
+    result = await run_renderer(
+        page,
+        """
+        const out = {};
+        for (const [name, doc] of Object.entries(args.docs)) {
+          const res = await go(doc);
+          const qr = res.blocks.find((b) => b.kind === 'qr');
+          out[name] = { rows: res.rows, ink: res.inkPercent > 0, w: qr.w, h: qr.h, x: qr.x };
+        }
+        return out;
+        """,
+        docs=documents,
+    )
+    for name, document in documents.items():
+        plan = STUDIO.layout_blocks(document)
+        qr = next(block for block in plan["blocks"] if block["kind"] == "qr")
+        expected = {"rows": plan["rows"], "ink": True, "w": qr["w"], "h": qr["h"], "x": qr["x"]}
+        assert result[name] == expected, (name, result[name], expected)
+
+
 async def check_renderer_font_failure(page):
     file = FONTS["roboto_flex"]["file"]
     await page.route(f"**/fonts/{file}", lambda route: route.fulfill(status=404, body="gone"))
@@ -3327,6 +3399,14 @@ CHECKS = [
     ("renderer: sliders change the strip across their full ranges", check_renderer_sliders),
     ("renderer: Tiny5 has no intermediate alpha at sizes 8, 16, 24", check_renderer_tiny5_crisp),
     ("renderer: works without OffscreenCanvas", check_renderer_no_offscreen),
+    (
+        "renderer: the page direction never changes the bidi base",
+        check_renderer_ignores_page_direction,
+    ),
+    (
+        "renderer: a U+FEFF-only QR is drawn like Python draws it",
+        check_renderer_feff_only_qr_matches_python,
+    ),
     ("renderer: font failure fails loudly", check_renderer_font_failure),
     ("renderer: DEFAULT_OPTIONS equals studio_render.DEFAULTS", check_renderer_defaults),
     ("renderer: selfTest passes", check_renderer_self_test),

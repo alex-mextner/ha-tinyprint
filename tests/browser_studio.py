@@ -1554,6 +1554,19 @@ async def baseline_shift(page, key, shot):
     return drawn, typed
 
 
+async def check_overlay_ignores_page_direction(p, browser):
+    """An RTL Home Assistant locale must not flip the bidi base of the overlays: the bitmap is LTR."""
+    async with panel(p, browser) as page:
+        await page.evaluate("() => { document.documentElement.dir = 'rtl'; }")
+        await fill_note(page)
+        for key in ("title", "text", "footer"):
+            direction = await page.evaluate(
+                f"(key) => getComputedStyle({PANEL}.shadowRoot.querySelector('#field-' + key)).direction",
+                key,
+            )
+            assert direction == "ltr", (key, direction)
+
+
 async def check_overlay_baseline(p, browser):
     """With the overlay text made visible its first and last ink rows equal the bitmap's within 1 dot."""
     shot = OUT / "baseline.png"
@@ -2676,6 +2689,7 @@ CHECKS = [
     ("overlay geometry equals block geometry at 1x, 2x and 390px", check_overlay_geometry, False),
     ("zoom is an integer 1x/2x toggle; narrow cards scroll", check_zoom_rule, False),
     ("overlay uses the renderer's font and the block's alignment", check_overlay_font, False),
+    ("overlays ignore the page direction", check_overlay_ignores_page_direction, False),
     ("overlay baseline equals the bitmap baseline", check_overlay_baseline, False),
     ("typing in an overlay updates the strip within a frame", check_typing_updates_strip, False),
     ("print() itself refuses in the blocker states", check_direct_print_respects_blockers, False),

@@ -1,7 +1,8 @@
 // Browser port of the Python label layout (studio_render.py): wrap, band geometry, anchors, slots.
 // Measuring and drawing use the same context font (`face.css(size)`) and `ctx.measureText`; the
-// caller owns the context recipe (OffscreenCanvas, textRendering = 'geometricPrecision').
+// caller owns the context recipe (`configure()` in index.js).
 import { RenderError } from './errors.js';
+import { BLANK } from './blank.js';
 import { drawQr, qrScale } from './qr.js';
 
 const WIDTH = 384;
@@ -281,7 +282,7 @@ function spoolPart(rows, size, align, face, ctx) {
 // Band of a QR code: the symbol plus a 4-module quiet zone, scaled by whole pixels. The module
 // count comes from `qrModules(text, ecc)` (the encoder lives in qr.js).
 function qrPart(field, text, options, qrModules) {
-  if (typeof text !== 'string' || text.trim() === '') throw new RenderError('blank_qr');
+  if (typeof text !== 'string' || BLANK.test(text)) throw new RenderError('blank_qr');
   if (typeof qrModules !== 'function') {
     throw new RenderError('bad_document', 'QR planning needs a module counter');
   }

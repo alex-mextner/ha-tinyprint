@@ -3,6 +3,7 @@
 // carry `exact: false` and no `document`; a ghost carries no bitmap at all.
 import { FaceRegistry } from './fonts.js';
 import { RenderError } from './errors.js';
+import { BLANK } from './blank.js';
 import { planLabel, drawPlan } from './layout.js';
 import { processImage } from './image.js';
 import { qrModules } from './qr.js';
@@ -71,8 +72,6 @@ function length(text) {
   for (const _ of text) count += 1;
   return count;
 }
-// Python's str.strip() whitespace; JS trim() differs (it strips U+FEFF but not U+001C-1F, U+0085).
-export const BLANK = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
 
 /** Multiples of `step` from 0, half up (475 -> 500 at step 50), clamped to [min, max]. */
 export function snapToGrid(value, step, min, max) {
@@ -199,9 +198,16 @@ function makeCanvas(rows) {
   return element;
 }
 
+// Resizing a canvas resets its context state, so every resize configures it again.
+function configure(ctx) {
+  ctx.textRendering = 'geometricPrecision';
+  // 'inherit' would take the page's direction: an RTL Home Assistant locale must not change the bidi base.
+  ctx.direction = 'ltr';
+}
+
 function makeContext(canvas) {
   const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
-  ctx.textRendering = 'geometricPrecision';
+  configure(ctx);
   return ctx;
 }
 
@@ -276,7 +282,7 @@ export class Renderer {
     // (every draw restores the state it changes, so nothing leaks from one render to the next).
     if (canvas.height !== rows) {
       canvas.height = rows;
-      ctx.textRendering = 'geometricPrecision';
+      configure(ctx);
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
