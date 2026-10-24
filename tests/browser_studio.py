@@ -774,12 +774,16 @@ async def check_print_reason_is_visible_text(p, browser):
         assert await page.locator("#print").is_disabled()
         assert await page.locator(reason).inner_text() == blockers["render_pending"]
         assert await page.locator(reason).get_attribute("role") == "status"
-        below = f"() => {PANEL}.shadowRoot.querySelector('#editor-card').getBoundingClientRect().height"
+        below = (
+            f"() => {PANEL}.shadowRoot.querySelector('#editor-card').getBoundingClientRect().height"
+        )
         shown = await page.evaluate(below)
         await settle(page)
         assert await page.locator("#print").is_enabled()
         assert await page.locator(reason).inner_text() == ""
-        assert await page.evaluate(below) == shown  # the line keeps its room: the card does not resize
+        assert (
+            await page.evaluate(below) == shown
+        )  # the line keeps its room: the card does not resize
         await set_state(page, "printing")
         assert await page.locator("#print").is_disabled()
         assert await page.locator(reason).inner_text() == blockers["job_in_flight"]
