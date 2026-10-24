@@ -209,7 +209,7 @@ class TinyPrintPanel extends HTMLElement {
         <div class="devicebar"><label>Принтер<select id="device"><option value="">Загрузка принтеров…</option></select></label><span id="device-status" class="badge">Подключение к HA</span><span id="job-status" class="badge" role="status" hidden></span><button id="refresh" class="button" aria-label="Обновить состояние">Обновить</button><button id="diagnose" class="button">Проверить Bluetooth</button></div>
         <div class="layout">
           <section class="card live" aria-label="Бумажная лента">
-              <div class="strip-head"><h2>На бумаге</h2><span class="badge">384 точки</span><button id="zoom" class="button" aria-label="Масштаб ленты" aria-pressed="false">1×</button></div>
+              <div class="strip-head"><h2>На бумаге</h2><span class="badge">384 точки</span><button id="zoom" class="button" aria-label="Масштаб ленты: 1×" aria-pressed="false">1×</button></div>
               <fieldset id="options" aria-label="Параметры этикетки">
                 <div id="text-options" class="bar">
                   <div class="field"><label for="font">Шрифт</label><select id="font" data-option="font"></select></div>
@@ -615,6 +615,7 @@ class TinyPrintPanel extends HTMLElement {
   setZoom(zoom) {
     this.strip.setZoom(zoom);
     this.$('#zoom').textContent = `${zoom}×`;
+    this.$('#zoom').setAttribute('aria-label', `Масштаб ленты: ${zoom}×`);
     this.$('#zoom').setAttribute('aria-pressed', String(zoom === 2));
   }
   fitZoom() {

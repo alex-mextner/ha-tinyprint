@@ -795,6 +795,16 @@ async def check_print_reason_is_visible_text(p, browser):
         assert line["y"] >= button["y"] + button["height"], (button, line)
 
 
+async def check_zoom_name_includes_visible_label(p, browser):
+    """The accessible name of #zoom contains its visible text and follows the state."""
+    async with panel(p, browser) as page:
+        for _ in range(3):
+            visible = await page.locator("#zoom").inner_text()
+            name = await page.locator("#zoom").get_attribute("aria-label")
+            assert name == f"Масштаб ленты: {visible}", (name, visible)
+            await page.locator("#zoom").click()
+
+
 async def check_font_failure(p, browser):
     async with panel(p, browser, settle=False, missing_font=True) as page:
         await page.wait_for_function(SETTLED)
@@ -2729,6 +2739,11 @@ CHECKS = [
     ("typing in an overlay updates the strip within a frame", check_typing_updates_strip, False),
     ("print() itself refuses in the blocker states", check_direct_print_respects_blockers, False),
     ("a disabled Print explains itself in visible text", check_print_reason_is_visible_text, False),
+    (
+        "the zoom button's accessible name includes its visible label",
+        check_zoom_name_includes_visible_label,
+        False,
+    ),
     (
         "a blank field stays reachable and keeps focus and caret",
         check_blank_field_keeps_focus,
