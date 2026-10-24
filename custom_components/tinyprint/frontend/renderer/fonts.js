@@ -22,6 +22,16 @@ function hhea(buffer) {
   };
 }
 
+const SUBPIXELS = 64; // FreeType's 26.6 fixed point
+
+// Pillow's pixel metric: FreeType rounds to 26.6 before the ceiling, so a plain ceiling of
+// 1900 * 83 / 2048 = 77.00195 gives 78 where Pillow gives 77. `units` is a positive magnitude
+// (pass -descender), which keeps Math.round's ties the same as FreeType's. The metrics fixture is
+// the contract.
+function ceilPixels(units, size, unitsPerEm) {
+  return Math.ceil(Math.round((units * size * SUBPIXELS) / unitsPerEm) / SUBPIXELS);
+}
+
 function makeFace(family, buffer, entry) {
   let metrics;
   try {
@@ -35,8 +45,8 @@ function makeFace(family, buffer, entry) {
     entry,
     scaleX: 1,
     css: (size) => `${size}px "${family}"`,
-    ascent: (size) => Math.ceil((ascender * size) / unitsPerEm),
-    descent: (size) => Math.ceil((-descender * size) / unitsPerEm),
+    ascent: (size) => ceilPixels(ascender, size, unitsPerEm),
+    descent: (size) => ceilPixels(-descender, size, unitsPerEm),
   };
 }
 

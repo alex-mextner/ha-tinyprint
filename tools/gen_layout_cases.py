@@ -64,15 +64,24 @@ def build_hashes() -> dict:
     return out
 
 
-METRIC_SIZES = (8, 12, 16, 24, 32, 48, 64, 96)
+DERIVED_ROLES = ("title", "heading", "footer")
 EDGE_FILLERS = "mnoeaxvuczrsiljt.,'"
 
 
-def _size_allowed(font: str, size: int) -> bool:
+def _allowed_sizes(font: str) -> list[int]:
     spec = fonts.FONTS[font]["sizes"]
-    if "values" in spec:
-        return size in spec["values"]
-    return spec["min"] <= size <= spec["max"]
+    return list(spec["values"]) if "values" in spec else list(range(spec["min"], spec["max"] + 1))
+
+
+def _metric_sizes(font: str) -> list[int]:
+    """Every size the layout asks a face for: the allowed sizes and the title/heading/footer sizes derived from them."""
+    sizes = set(_allowed_sizes(font))
+    sizes.update(
+        fonts.derived_size(font, role, size)
+        for size in _allowed_sizes(font)
+        for role in DERIVED_ROLES
+    )
+    return sorted(sizes)
 
 
 def _options(**overrides) -> dict:
@@ -247,9 +256,7 @@ def build_cases() -> dict:
     metrics = []
     derived = []
     for font, width, weight in sorted(used):
-        for size in METRIC_SIZES:
-            if not _size_allowed(font, size):
-                continue
+        for size in _metric_sizes(font):
             ascent, descent = fonts.open_font(font, size, width, weight).getmetrics()
             metrics.append(
                 {
@@ -262,17 +269,16 @@ def build_cases() -> dict:
                 }
             )
     for font in sorted({f for f, _, _ in used}):
-        for size in METRIC_SIZES:
-            if _size_allowed(font, size):
-                for role in ("title", "heading", "footer"):
-                    derived.append(
-                        {
-                            "font": font,
-                            "size": size,
-                            "role": role,
-                            "value": fonts.derived_size(font, role, size),
-                        }
-                    )
+        for size in _allowed_sizes(font):
+            for role in DERIVED_ROLES:
+                derived.append(
+                    {
+                        "font": font,
+                        "size": size,
+                        "role": role,
+                        "value": fonts.derived_size(font, role, size),
+                    }
+                )
     return {"env": build_env(), "metrics": metrics, "derived": derived, "cases": cases}
 
 
