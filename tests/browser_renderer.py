@@ -291,11 +291,15 @@ async def check_corrupt_font(page):
 async def check_concurrent_settle_order(page):
     tiny_file = FONTS["tiny5"]["file"]
 
-    async def slow(route):
-        await asyncio.sleep(1.0)
+    released = asyncio.Event()
+
+    async def held(route):
+        # Tiny5 stays in flight until the page reports that every Roboto face has settled.
+        await asyncio.wait_for(released.wait(), 20)
         await route.fallback()
 
-    await page.route(f"**/fonts/{tiny_file}", slow)
+    await page.route(f"**/fonts/{tiny_file}", held)
+    await page.expose_function("releaseTiny", released.set)
     result = await page.evaluate(
         """async ([url, base, fonts]) => {
           const { FaceRegistry } = await import(url);
@@ -304,6 +308,7 @@ async def check_concurrent_settle_order(page):
           const order = [];
           const requests = [registry.face('tiny5', fonts.tiny5, 100, 400)];
           for (const w of [20, 30, 40, 50, 60, 70, 80, 90]) requests.push(registry.face('roboto_flex', fonts.roboto_flex, w, 400));
+          Promise.all(requests.slice(1)).then(() => window.releaseTiny());
           const checked = await Promise.all(requests.map(async (request, i) => {
             const face = await request;
             order.push(i);
@@ -401,7 +406,9 @@ for (const c of args.cases) {
       return;
     }
     if (JSON.stringify(b.lines) !== JSON.stringify(x.lines)) bad(`block ${i} lines ${JSON.stringify(b.lines)} != ${JSON.stringify(x.lines)}`);
-    for (const k of ['x', 'y', 'w', 'h', 'text_y']) if (!near(b[k], x[k])) bad(`block ${i} ${k} ${b[k]} != ${x[k]}`);
+    // Only the horizontal values come from fractional text widths; rows and heights are integer arithmetic.
+    for (const k of ['x', 'w']) if (!near(b[k], x[k])) bad(`block ${i} ${k} ${b[k]} != ${x[k]}`);
+    for (const k of ['y', 'h', 'text_y']) if (b[k] !== x[k]) bad(`block ${i} ${k} ${b[k]} != ${x[k]}`);
     for (const k of ['step', 'size', 'ascent', 'descent']) if (b[k] !== x[k]) bad(`block ${i} ${k} ${b[k]} != ${x[k]}`);
     const ja = b.anchors ?? [];
     const xa = x.anchors ?? [];
@@ -409,7 +416,8 @@ for (const c of args.cases) {
     xa.forEach((a, k) => {
       const m = ja[k];
       if (!m || m.field !== a.field) { bad(`block ${i} anchor ${k} field`); return; }
-      for (const key of ['x', 'text_y', 'w', 'h']) if (!near(m[key], a[key])) bad(`anchor ${a.field} ${key} ${m[key]} != ${a[key]}`);
+      for (const key of ['x', 'w']) if (!near(m[key], a[key])) bad(`anchor ${a.field} ${key} ${m[key]} != ${a[key]}`);
+      for (const key of ['text_y', 'h']) if (m[key] !== a[key]) bad(`anchor ${a.field} ${key} ${m[key]} != ${a[key]}`);
     });
   });
 }
