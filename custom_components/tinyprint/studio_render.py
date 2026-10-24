@@ -683,7 +683,7 @@ def bitmap(image: Image.Image) -> tuple[bytes, int]:
 
 
 def preview_result(image: Image.Image) -> dict[str, Any]:
-    """Return an in-memory PNG; no public file, history or persistent image state."""
+    """Return the `preview` service result: an in-memory PNG plus the bitmap hash; nothing is stored."""
     data, height = bitmap(image)
     output = io.BytesIO()
     image.save(output, format="PNG")

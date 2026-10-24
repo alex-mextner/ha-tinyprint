@@ -25,7 +25,9 @@ tinyprint:
 Use the actual local adapter address. The existing printer entry and entity/device IDs are
 preserved through HA's public import update API. Unchanged imports do not force reloads.
 Explicit UI options override imported data. Bridge credentials are not accepted in YAML.
-The font directory still needs the existing root `homeassistant.allowlist_external_dirs` entry.
+With `font_path` set, its directory still needs the existing root `homeassistant.allowlist_external_dirs`
+entry. Without `font_path` no entry is needed: `font_path` is only an override, and Roboto Flex and
+Tiny5 are bundled (see `studio.md`).
 
 All existing print actions, the test button, Studio templates and the sidebar use the selected
 transport. Preview remains offline. Local diagnosis reads the real GATT table without sending

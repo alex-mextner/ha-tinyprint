@@ -1,4 +1,5 @@
-/* Native HA web component. No CDN, token storage or automatic printing.
+/* Native HA web component: renders the label strip in the browser and prints the displayed bitmap through
+ * tinyprint.print_bitmap. No CDN, token storage or automatic printing.
  * The entry file defines the element at once; the renderer and the editor rules load as ES modules
  * relative to this file, so the versioned static path versions every import. */
 const BASE_URL = new URL('./', import.meta.url);
