@@ -170,7 +170,7 @@ class TinyPrintPanel extends HTMLElement {
         textarea { min-height:100px; resize:vertical; } input[type=range] { width:100%; accent-color:var(--primary-color,#007a73); min-height:32px; }
         .field { margin:0 0 15px; } .field label { margin-bottom:5px; } .row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
         .row > * { min-width:0; } .hint,small { color:var(--secondary-text-color,#697580); font-size:12px; }
-        .hint { margin:7px 0 17px; } fieldset { border:0; padding:0; margin:0; min-width:0; }
+        .hint { margin:7px 0 17px; } #print-reason { line-height:1.5; min-height:1.5em; margin:7px 0 0; } fieldset { border:0; padding:0; margin:0; min-width:0; }
         .check { display:flex; align-items:center; gap:8px; min-height:38px; } input[type=checkbox] { width:18px; height:18px; accent-color:var(--primary-color,#007a73); }
         summary { cursor:pointer; padding:12px 0; font-weight:550; font-size:13px; } details { border-top:1px solid var(--divider-color,#e2e5eb); margin-top:10px; }
         .buttons { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
@@ -247,6 +247,7 @@ class TinyPrintPanel extends HTMLElement {
               </div>
             </fieldset>
             <div class="buttons"><button id="print" class="button primary" disabled>Печатать</button><button id="cancel" class="button" hidden>Остановить</button></div>
+            <p id="print-reason" class="hint" role="status"></p>
           </section>
           <section id="more-card" class="card more" aria-label="Диагностика и автоматизация"><details id="diagnostics"><summary>Диагностика задания</summary><pre id="diagnostic-data">Проверка ещё не запускалась.</pre><p class="hint">Проверка рендерера ничего не печатает и не отправляет: она только рисует тестовую надпись на этом устройстве.</p><button id="renderer-check" class="button">Проверить рендерер</button> <button id="renderer-check-copy" class="button" hidden>Скопировать результат</button><p id="renderer-check-status" role="status" aria-live="polite" hidden></p><pre id="renderer-check-data"></pre></details><details id="automation"><summary>Действие для автоматизации</summary><p class="hint">JSON ниже также допустим в YAML. Он описывает ровно ту этикетку, что показана на ленте.</p><pre id="action-data"></pre><button id="copy" class="button">Скопировать действие</button></details></section>
         </div>
@@ -696,6 +697,10 @@ class TinyPrintPanel extends HTMLElement {
     const text = codes.map(code => code === 'required_blank' ? `${BLOCKER_TEXT.required_blank} ${missing.map(field => this.fieldCaption(template, field)).join(', ')}` : BLOCKER_TEXT[code]);
     this.$('#print').disabled = codes.length > 0;
     this.$('#print').title = text.join('. ');
+    // Touch screens show no tooltips: the first blocker is also written under the button. The line
+    // keeps one line of height when empty, so a one-line reason does not move the cards below.
+    const reason = this.$('#print-reason'), first = text[0] ?? '';
+    if (reason.textContent !== first) reason.textContent = first; // a live region: no rewrite, no repeat
     this.$('#diagnose').disabled = this.pendingCall || !this.$('#device').value;
     this.$('#cancel').hidden = !this.printing;
     this.$('#editor').disabled = this.printing;

@@ -764,6 +764,37 @@ async def check_direct_print_respects_blockers(p, browser):
         await assert_direct_print_refused(page, "text_too_long")
 
 
+async def check_print_reason_is_visible_text(p, browser):
+    """A disabled Print explains itself in text under the button (touch screens show no title)."""
+    reason = "#print-reason"
+    async with panel(p, browser, settle=False, font_delay_ms=300) as page:
+        await page.wait_for_function(f"() => {PANEL}.loaded")
+        blockers = await texts(page)
+        await fill_text(page, "Дождись")
+        assert await page.locator("#print").is_disabled()
+        assert await page.locator(reason).inner_text() == blockers["render_pending"]
+        assert await page.locator(reason).get_attribute("role") == "status"
+        below = f"() => {PANEL}.shadowRoot.querySelector('#editor-card').getBoundingClientRect().height"
+        shown = await page.evaluate(below)
+        await settle(page)
+        assert await page.locator("#print").is_enabled()
+        assert await page.locator(reason).inner_text() == ""
+        assert await page.evaluate(below) == shown  # the line keeps its room: the card does not resize
+        await set_state(page, "printing")
+        assert await page.locator("#print").is_disabled()
+        assert await page.locator(reason).inner_text() == blockers["job_in_flight"]
+        await set_state(page, "idle")
+        assert await page.locator(reason).inner_text() == ""
+        await fill_text(page, "")
+        await settle(page)
+        assert await page.locator(reason).inner_text() == blockers["no_input"]
+        assert await page.evaluate(below) == shown
+        # Below Print, never overlapping the button.
+        button = await page.locator("#print").bounding_box()
+        line = await page.locator(reason).bounding_box()
+        assert line["y"] >= button["y"] + button["height"], (button, line)
+
+
 async def check_font_failure(p, browser):
     async with panel(p, browser, settle=False, missing_font=True) as page:
         await page.wait_for_function(SETTLED)
@@ -2697,6 +2728,7 @@ CHECKS = [
     ("overlay baseline equals the bitmap baseline", check_overlay_baseline, False),
     ("typing in an overlay updates the strip within a frame", check_typing_updates_strip, False),
     ("print() itself refuses in the blocker states", check_direct_print_respects_blockers, False),
+    ("a disabled Print explains itself in visible text", check_print_reason_is_visible_text, False),
     (
         "a blank field stays reachable and keeps focus and caret",
         check_blank_field_keeps_focus,

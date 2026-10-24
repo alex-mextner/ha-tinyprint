@@ -13,7 +13,7 @@ export const BLOCKERS = [
   'job_in_flight',
 ];
 
-/** Tooltip text per blocker; the caller appends the field captions to `required_blank`. */
+/** User-facing text per blocker (tooltip and the line under Print); the caller appends the field captions to `required_blank`. */
 export const BLOCKER_TEXT = Object.freeze({
   no_device: 'Выберите принтер',
   no_input: 'Введите текст, QR или загрузите изображение',
