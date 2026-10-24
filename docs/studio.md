@@ -99,8 +99,10 @@ narrow card scrolls; the zoom button overrides this.
 ### Phone and Companion app
 
 The panel needs a browser with canvas text rendering and variable-font support. The
-renderer gate passed on Safari 27 on iOS 18.7 (width and weight axes, deterministic
-render, bitmap round trip). The Home Assistant Companion app and paper output on a
+renderer gate passed on an iPhone whose Safari user agent reported `Version/27.0.1`
+and `iPhone OS 18_7` (width and weight axes, deterministic render, bitmap round trip).
+The iOS version string in a user agent can be frozen, so this is not a claim about the
+exact iOS release. The Home Assistant Companion app and paper output on a
 phone are **not yet verified**; release notes will say when they are.
 
 ### Renderer self-check
@@ -180,12 +182,14 @@ resize/compress first or supply an appropriately bounded local file in an automa
 
 **Studio prints the browser's bitmap**, so what you see is what is printed.
 Automations (`print_text`, `print_qr`, `print_image`, `print_document`,
-`print_template`, `preview` and the test button) use the server-side Pillow renderer.
+`print_template`, `preview` and the test button) use the server-side Pillow renderer
+(`print_bitmap` sends an already rendered bitmap).
 The layout is the same, but the output is **not pixel-identical**: stroke weight
-differs at sub-pixel level and glyphs may drift by 0-1 px. In development
-measurements the two renderers differed in 16-42% of the pixels inked by either, with
-equal legibility; different browser engines also differ from each other (up to about
-9% of the ink bits between Chromium and Firefox).
+differs at sub-pixel level and glyphs may drift by 0-1 px. In a one-off
+feasibility measurement (a throwaway spike, not part of the test suite, and it may vary
+with browser version) the two renderers differed in 16-42% of the pixels inked by
+either, with equal legibility; Chromium and Firefox differed from each other by up to
+about 9% of the ink bits.
 
 - Columns 2 and 3 and Tiny5 at `font_width` 200 are **browser-only**. The Pillow
   actions reject them with a validation error (`columns` must be 1; Tiny5 `font_width`
@@ -354,7 +358,8 @@ long-lived automations. These framework traces are not controlled by TinyPrint.
 
 `print_bitmap` is such a case: its service data (the bitmap) is carried in HA
 `call_service` events, which the recorder stores (event data above 32768 bytes is
-replaced by an empty `{}` and HA logs a warning, so large bitmaps are not kept). To keep
+replaced by an empty `{}` and HA logs a warning: the event row is still recorded, but
+without the bitmap). To keep
 label content out of the database, exclude that event type:
 
 ```yaml

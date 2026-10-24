@@ -19,6 +19,6 @@
 
 ### Notes
 - Columns 2-3 and Tiny5 at width 200 are browser-only; Pillow actions reject them. Panel and Pillow output are not pixel-identical ([details](studio.md#panel-and-automations-use-different-renderers)).
-- Phone support: the renderer gate passed on Safari 27 / iOS 18.7; the Companion app and paper output are not yet verified ([Phone](studio.md#phone-and-companion-app)).
+- Phone support: the renderer gate passed in iPhone Safari (user agent `Version/27.0.1`, `iPhone OS 18_7`); the Companion app and paper output are not yet verified ([Phone](studio.md#phone-and-companion-app)).
 - `print_bitmap` data appears in `call_service` events and is stored by the recorder; see [Privacy and persistence](studio.md#privacy-and-persistence).
 - Characters missing from the bundled fonts print as your device's fallback glyphs in the panel and as a missing-glyph box in Pillow actions ([Fonts](studio.md#fonts)).

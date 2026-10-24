@@ -279,10 +279,10 @@ filled):
 - Privacy: content now persists in `/config/.storage/tinyprint.history` and HA backups. Home Assistant
   also fires a `call_service` event carrying the full `service_data` for every service call, and the
   recorder stores events by default (it skips only event types excluded in `recorder:`). The recorder
-  drops event data above 32768 bytes with a logged error (`MAX_EVENT_DATA_BYTES`), so the bitmap and
+  replaces event data above 32768 bytes (`MAX_EVENT_DATA_BYTES`) with `{}` and logs a warning (HA 2026.9.3 `db_schema.py`, `EventData.shared_data_bytes_from_event`; the event row is kept), so the bitmap and
   recipe of small `print_bitmap` calls (roughly 500 rows or fewer with an empty recipe; the recipe counts
   too) land in the recorder database and larger
-  ones do not, at the cost of an error log line per print (verified against HA 2026.9.3 sources; the
+  ones do not, at the cost of a warning log line per print (verified against HA 2026.9.3 sources; the
   existing `print_document` text has the same exposure). Documentation says so
   plainly and shows `recorder: exclude: event_types: [call_service]`. `history_clear` does not purge
   backups or recorder rows, and history of a removed printer is not deleted automatically. Logs and
