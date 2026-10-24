@@ -158,6 +158,10 @@ async def open_panel(
     return page
 
 
+class Skipped(Exception):
+    """A check that cannot run in this browser: reported as skipped, neither ok nor failed."""
+
+
 @contextlib.asynccontextmanager
 async def panel(p, browser, settle=True, **options):
     page = await open_panel(p, browser, **options)
@@ -1885,7 +1889,7 @@ async def check_spool_anchors(p, browser):
 async def check_composition(p, browser):
     """An IME composition survives a re-render and reaches the draft only when it ends (Chromium CDP)."""
     if browser != "chromium":
-        return  # Playwright can only drive a real composition through the Chromium protocol
+        raise Skipped("Playwright can only drive a real composition through the Chromium protocol")
     async with panel(p, browser) as page:
         await fill_text(page, "Верх", "title")
         await settle(page)
@@ -2805,7 +2809,7 @@ async def main() -> int:
     )
     image_file = OUT / "browser-image.png"
     gradient.save(image_file)
-    passed, failed = [], []
+    passed, skipped, failed = [], [], []
     first = browsers()[0]
     async with async_playwright() as p:
         for name in browsers():
@@ -2826,6 +2830,9 @@ async def main() -> int:
                     await check(p, name, *args)
                     passed.append(f"[{name}] {title}")
                     print(f"ok   [{name}] {title}")
+                except Skipped as reason:
+                    skipped.append(f"[{name}] {title}: {reason}")
+                    print(f"skip [{name}] {title}: {reason}")
                 except Exception as error:  # noqa: BLE001 - report every failing check
                     line = traceback.extract_tb(error.__traceback__)[-1].lineno
                     failed.append(f"[{name}] {title}: {error!r} (line {line})")
@@ -2835,10 +2842,12 @@ async def main() -> int:
     report = {
         "checks": passed,
         "count": len(passed),
+        "skipped": skipped,
         "failures": failed,
         "scope": "Bundled component + real renderer; mock HA/BLE, no hardware",
     }
     (OUT / "browser-results.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    print(f"{len(passed)} ok, {len(skipped)} skipped, {len(failed)} failed")
     return 1 if failed else 0
 
 
