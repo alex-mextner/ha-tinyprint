@@ -1,5 +1,7 @@
 # TinyPrint X6h for Home Assistant
 
+Current version: 0.3.0.
+
 Local Bluetooth printing of text (including Cyrillic), QR codes and local images.
 Designed for lowercase-h **X6h** devices advertising AF30, with AE01 write and
 AE02 notification characteristics. This is **not** a generic X6H/MXW01/Phomemo driver.
@@ -12,7 +14,7 @@ the target unit is **not yet confirmed**: the device stopped advertising before
 the hardware check. A successful service result means **sent**, never verified
 paper output. Treat this initial version as an experimental integration.
 
-## Direct local LE (0.2.2)
+## Direct local LE (since 0.2.2)
 
 For an X6h on a Linux HA host, the opt-in `local_le` transport bypasses Classic
 Bluetooth bearer selection without a second host, HTTP bridge or token. All

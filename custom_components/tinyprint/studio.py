@@ -24,7 +24,7 @@ from .sensor import IN_FLIGHT_STATES, job_sensor_unique_id
 from .studio_render import PRESETS, TEMPLATES, preview_result, render_document
 
 DATA_KEY = "tinyprint_studio"
-PANEL_VERSION = "0.2.2"
+PANEL_VERSION = "0.3.0"
 
 
 def _printer(hass: HomeAssistant, device_id: str) -> Any:

@@ -402,13 +402,13 @@ class SetupTests(BridgeCase):
         from custom_components.tinyprint.studio import PANEL_VERSION
 
         manifest = Path(__file__).parents[1] / "custom_components/tinyprint/manifest.json"
-        self.assertEqual(json.loads(manifest.read_text())["version"], "0.2.2")
-        self.assertEqual(PANEL_VERSION, "0.2.2")
+        self.assertEqual(json.loads(manifest.read_text())["version"], "0.3.0")
+        self.assertEqual(PANEL_VERSION, "0.3.0")
         printer = self.printer()
         report = await async_get_config_entry_diagnostics(
             self.hass, SimpleNamespace(entry_id="entry")
         )
-        self.assertEqual(report["version"], "0.2.2")
+        self.assertEqual(report["version"], "0.3.0")
         self.assertIsNotNone(printer)
 
 
